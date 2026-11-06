@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Выбор GPU, которым рендерит Hyprland, — запускается из ~/.profile ДО старта Hyprland
+# (переменные AQ_* читаются только при запуске). Пишет ~/.config/hypr/gpu.conf,
+# который подключает hyprland.conf.
+#   ноутбук от сети → NVIDIA первой: Acer (HDMI висит на NVIDIA) не гоняет кадры между GPU
+#     (на AMD Hyprland ел 75–95% ядра, на NVIDIA 30–45%);
+#   от батареи → AMD первой: встроенный экран на AMD, дискретка спит.
+# Не по подключённому монитору: Acer часто включают ПОСЛЕ входа (21.10.2026 так и было —
+# «Connector HDMI-A-1 is not connected» при старте), а сменить GPU на ходу Hyprland не умеет.
+# Аварийный выключатель: touch ~/.config/hypr/gpu-amd-only — всегда AMD первой.
+# Номера cardN ищутся по драйверу, а не зашиты: после обновления ядра они могут смениться.
+# В пути ТОЛЬКО /dev/dri/cardN — список режется по двоеточию (см. hyprland.conf).
+set -u
+
+out=$HOME/.config/hypr/gpu.conf
+amd= nv= on_ac=
+for c in /sys/class/drm/card[0-9]*; do
+    [[ $c =~ card[0-9]+$ ]] || continue
+    drv=$(basename "$(readlink -f "$c/device/driver")" 2>/dev/null)
+    case $drv in
+        amdgpu) amd=/dev/dri/$(basename "$c") ;;
+        nvidia) nv=/dev/dri/$(basename "$c") ;;
+    esac
+done
+for ps in /sys/class/power_supply/*; do
+    [ "$(cat "$ps/type" 2>/dev/null)" = Mains ] && [ "$(cat "$ps/online" 2>/dev/null)" = 1 ] && on_ac=1
+done
+
+if [ -z "$amd" ] || [ -z "$nv" ]; then
+    # не нашли обе карты — пусть Aquamarine выберет сам, сеанс точно запустится
+    echo "# hypr-gpu-select $(date '+%F %T'): GPU не найдены (amd='$amd' nv='$nv'), выбор за Aquamarine" > "$out"
+    exit 0
+fi
+
+# GLX-вендор должен совпадать с GPU, на котором Hyprland (а значит и Xwayland): если
+# Xwayland на NVIDIA, а GLX принудительно mesa, Mesa не поднимает dri3 и уходит в zink
+# (GL поверх Vulkan) — интерфейс Steam и прочие XWayland-программы на GL шли в 5–10 кадров.
+if [ -e "$HOME/.config/hypr/gpu-amd-only" ]; then
+    devs="$amd:$nv"; glx=mesa; why="есть gpu-amd-only — рендер на AMD"
+elif [ -n "$on_ac" ]; then
+    devs="$nv:$amd"; glx=nvidia; why="от сети — рендер на NVIDIA"
+else
+    devs="$amd:$nv"; glx=mesa; why="от батареи — рендер на AMD"
+fi
+printf '# hypr-gpu-select %s: %s\nenv = AQ_DRM_DEVICES,%s\nenv = __GLX_VENDOR_LIBRARY_NAME,%s\n' \
+    "$(date '+%F %T')" "$why" "$devs" "$glx" > "$out"

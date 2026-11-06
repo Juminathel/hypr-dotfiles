@@ -1,0 +1,8 @@
+# Драйвер NVIDIA для RTX 5060 Ti (поколение Blackwell — только открытый модуль nvidia-open).
+# Ставит: ./install.sh --packages --nvidia
+# lib32-nvidia-utils нужен для Steam/игр — сначала включить репозиторий [multilib] в /etc/pacman.conf.
+nvidia-open
+nvidia-utils
+lib32-nvidia-utils
+egl-wayland
+libva-nvidia-driver

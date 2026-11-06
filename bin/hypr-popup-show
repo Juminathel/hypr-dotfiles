@@ -1,0 +1,18 @@
+#!/bin/sh
+# Показать/спрятать постоянное всплывающее окно (см. ~/.local/bin/hypr_popup.py).
+#   hypr-popup-show search | cliphist | volume | wifi
+# Шелл, а не Python: сигнал уходит за пару миллисекунд. Если процесса окна нет —
+# запустить его, и он покажется сам (--show).
+kind=$1
+pid=$(cat "$XDG_RUNTIME_DIR/hypr-popup-$kind.pid" 2>/dev/null)
+if [ -n "$pid" ] && grep -qa -- '--daemon' "/proc/$pid/cmdline" 2>/dev/null; then
+    kill -USR1 "$pid" && exit 0
+fi
+case $kind in
+    search)   s=hypr-search ;;
+    cliphist) s=hypr-cliphist-pick ;;
+    volume)   s=hypr-volume ;;
+    wifi)     s=hypr-wifi ;;
+    *) echo "неизвестное окно: $kind" >&2; exit 1 ;;
+esac
+exec hyprctl dispatch exec "$HOME/.local/bin/$s --daemon --show"

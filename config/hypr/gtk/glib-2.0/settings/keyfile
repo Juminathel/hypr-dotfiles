@@ -1,0 +1,5 @@
+# Настройки GSettings только для waybar (GSETTINGS_BACKEND=keyfile + XDG_CONFIG_HOME=~/.config/hypr/gtk).
+# GTK на Wayland берёт тему курсора отсюда, а не из settings.ini; без этого файла — Adwaita.
+[org/gnome/desktop/interface]
+cursor-theme='Furina'
+cursor-size=32

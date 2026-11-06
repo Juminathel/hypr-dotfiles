@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Перетаскивание окон «Картинка в картинке» (Firefox, mpv-pip, mpv после Ctrl+P) обычной
+# левой кнопкой, без Super.
+# Firefox и mpv на Wayland сами просят композитор передвинуть окно, но Hyprland эти
+# просьбы не выполняет. Поэтому на нажатие ЛКМ (bindn в hyprland.conf, клик доходит до
+# программ как обычно) проверяем, не над PiP ли курсор. Перетаскивание (то же, что
+# Super+ЛКМ: dispatch mouse 1movewindow) запускаем, только когда мышь с зажатой кнопкой
+# сдвинулась больше чем на DEADZONE пикселей. Простой клик проходит в окно целиком,
+# поэтому кнопки паузы и перемотки работают. На отпускание (bindrn) всё заканчиваем.
+#   hypr-pip-drag press | release
+dir=${XDG_RUNTIME_DIR:-/tmp}
+held=$dir/hypr-pip-drag.held       # кнопка зажата над PiP
+dragging=$dir/hypr-pip-drag.active # перетаскивание идёт
+DEADZONE=6
+
+pos() { hyprctl cursorpos | tr -d ','; }
+
+case ${1:-} in
+press)
+    read -r x y < <(pos); x=${x%.*}; y=${y%.*}
+    hit=$(hyprctl -j clients | jq --argjson x "$x" --argjson y "$y" -r '
+        [.[] | select((.title | test("^(Picture-in-Picture|Картинка в картинке)$"))
+                      or .class == "mpv-pip"
+                      or (.class == "mpv" and .pinned and .floating))   # Ctrl+P в обычном mpv
+             | select(.at[0] <= $x and $x < .at[0] + .size[0]
+                  and .at[1] <= $y and $y < .at[1] + .size[1])] | length')
+    [ "${hit:-0}" -gt 0 ] || exit 0
+    : > "$held"
+    # ждём: либо отпустят (клик — ничего не делаем), либо потянут (тогда тащим окно)
+    for _ in $(seq 1 400); do          # не дольше ~6 с
+        [ -e "$held" ] || exit 0
+        read -r cx cy < <(pos); cx=${cx%.*}; cy=${cy%.*}
+        dx=$((cx - x)); dy=$((cy - y))
+        if [ $((dx * dx + dy * dy)) -gt $((DEADZONE * DEADZONE)) ]; then
+            : > "$dragging"
+            hyprctl dispatch mouse 1movewindow >/dev/null
+            exit 0
+        fi
+        sleep 0.015
+    done ;;
+release)
+    rm -f "$held"
+    if [ -e "$dragging" ]; then
+        rm -f "$dragging"
+        hyprctl dispatch mouse 0movewindow >/dev/null
+    fi ;;
+esac

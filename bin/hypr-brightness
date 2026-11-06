@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Смена яркости экрана без прав root.
+# brightnessctl пишет в sysfs и требует членства в группе video; если его нет,
+# работаем через logind по D-Bus — там достаточно быть владельцем активной сессии.
+# Использование: hypr-brightness +5   |   hypr-brightness -5
+set -u
+step="${1:-+5}"
+
+dev=$(ls /sys/class/backlight | head -1)
+[ -z "$dev" ] && exit 1
+base="/sys/class/backlight/$dev"
+max=$(cat "$base/max_brightness")
+cur=$(cat "$base/brightness")
+
+# путь 1: прямая запись, если права есть
+if [ -w "$base/brightness" ]; then
+    exec brightnessctl -e4 -n2 set "${step#+}%${step:0:1}" >/dev/null 2>&1
+fi
+
+# путь 2: через logind
+delta=$(( max * ${step#[+-]} / 100 ))
+case "${step:0:1}" in
+    -) new=$(( cur - delta )) ;;
+    *) new=$(( cur + delta )) ;;
+esac
+# не даём погасить экран совсем и не вылезаем за максимум
+min=$(( max / 100 ))
+[ "$new" -lt "$min" ] && new=$min
+[ "$new" -gt "$max" ] && new=$max
+
+sid="${XDG_SESSION_ID:-$(loginctl show-user "$USER" -p Display --value)}"
+busctl call org.freedesktop.login1 "/org/freedesktop/login1/session/_3${sid}" \
+    org.freedesktop.login1.Session SetBrightness ssu "backlight" "$dev" "$new" >/dev/null 2>&1

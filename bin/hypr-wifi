@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""Выпадающее окно Wi-Fi по клику на значок сети в waybar (в стиле окна громкости hypr-volume).
+
+  переключатель в заголовке — включить/выключить Wi-Fi
+  клик по сети              — подключиться; если нужен пароль, под сетью появится поле ввода
+  клик по текущей сети ✓    — отключиться
+  «настройки сети…»         — полные настройки KDE (то же, что ПКМ по значку)
+
+Открывается через hypr-panel-popup wifi (под значком, повторный клик — закрыть, клик мимо —
+закрыть через hypr-popup-dismiss). Esc тоже закрывает. Список сразу берётся из кэша
+NetworkManager, а в фоне идёт новый поиск — через пару секунд список обновится сам.
+"""
+import subprocess
+import sys
+import threading
+
+APP_ID = "hypr-wifi"
+WIDTH = 380
+LIST_H = 330
+SETTINGS = ["kcmshell6", "kcm_networkmanagement"]
+BARS = ["󰤯", "󰤟", "󰤢", "󰤥", "󰤨"]
+
+CSS = """
+* { font-family: "IBM Plex Mono", "JetBrainsMono Nerd Font"; font-size: 11pt; color: #cdd6f4;
+    outline: none; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }
+window, window:backdrop { background-color: rgba(30, 30, 46, 0.94); background-image: none; }
+.title, .title:backdrop { color: #89b4fa; font-weight: bold; }
+.section, .section:backdrop { color: #7f849c; font-size: 9pt; margin-top: 6px; }
+.status, .status:backdrop { color: #9399b2; font-size: 9pt; }
+.status.err { color: #f38ba8; }
+.sep { background-color: #313244; min-height: 1px; margin: 4px 0; }
+
+scrolledwindow, viewport, list, list:backdrop, scrolledwindow:backdrop, viewport:backdrop {
+    background-color: transparent; background-image: none; border: none; }
+row, row:backdrop { padding: 5px 8px; border-radius: 8px; margin: 1px 0;
+    background-color: transparent; background-image: none; border: 2px solid transparent; }
+row:hover, row:hover:backdrop { background-color: rgba(69, 71, 90, 0.6); }
+row:selected, row:selected:backdrop, row:selected:focus { background-color: transparent; }
+row.current, row.current:backdrop { background-color: #45475a; border-color: #89b4fa; }
+.bar, .bar:backdrop { font-family: "JetBrainsMono Nerd Font"; font-size: 14pt; color: #89b4fa; }
+.weak, .weak:backdrop { color: #7f849c; }
+.lock, .lock:backdrop { font-family: "JetBrainsMono Nerd Font"; color: #7f849c; }
+.check, .check:backdrop { font-family: "JetBrainsMono Nerd Font"; color: #a6e3a1; }
+
+entry, entry:backdrop { background-color: #313244; border: 1px solid #45475a; border-radius: 8px;
+    padding: 4px 8px; color: #cdd6f4; caret-color: #cdd6f4; background-image: none; }
+entry:focus { border-color: #89b4fa; }
+
+switch, switch:backdrop { background-color: #45475a; border: none; border-radius: 12px;
+    background-image: none; min-height: 22px; }
+switch:checked, switch:checked:backdrop { background-color: #89b4fa; }
+switch, switch:backdrop, switch label, switch image { color: transparent; font-size: 1px;
+    -gtk-icon-source: none; }
+switch slider, switch slider:backdrop { background-color: #cdd6f4; border: none;
+    border-radius: 10px; min-width: 20px; min-height: 20px; background-image: none; }
+
+button, button:backdrop { background-color: transparent; background-image: none; border: none;
+    border-radius: 8px; padding: 2px 6px; min-height: 0; min-width: 0; }
+button:hover { background-color: rgba(69, 71, 90, 0.6); }
+button.link label, button.link:backdrop label { font-size: 10pt; color: #89b4fa; }
+.vpn-icon, .vpn-icon:backdrop { font-family: "JetBrainsMono Nerd Font"; font-size: 13pt;
+    color: #7f849c; min-width: 22px; }
+.vpn-on .vpn-icon, .vpn-on .vpn-icon:backdrop { color: #a6e3a1; }
+.vpn-row { padding: 3px 8px; }
+.vpn-state, .vpn-state:backdrop { color: #7f849c; font-size: 9pt; }
+.vpn-on .vpn-state, .vpn-on .vpn-state:backdrop { color: #a6e3a1; }
+.vpn-state.err, .vpn-state.err:backdrop { color: #f38ba8; }
+scrollbar, scrollbar:backdrop { background-color: transparent; border: none; }
+scrollbar slider, scrollbar slider:backdrop { background-color: #585b70; border: none;
+    border-radius: 6px; min-width: 6px; }
+"""
+
+
+def nm(*args, **kw):
+    return subprocess.run(["nmcli", *args], capture_output=True, text=True, **kw)
+
+
+def split_t(line):
+    """строка nmcli -t: поля через «:», двоеточие внутри поля экранировано «\\:»"""
+    out, cur, esc = [], "", False
+    for ch in line:
+        if esc:
+            cur += ch
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return out
+
+
+def scan():
+    """{ssid: {sig, sec, cur}} из кэша NetworkManager, текущая сеть первой"""
+    nets = {}
+    out = nm("-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list",
+             "--rescan", "no").stdout
+    for line in out.splitlines():
+        inuse, ssid, signal, sec = (split_t(line) + ["", "", "0", ""])[:4]
+        if not ssid:
+            continue   # скрытые сети
+        sig = int(signal or 0)
+        old = nets.get(ssid, {"sig": 0, "cur": False})
+        nets[ssid] = {"sig": max(sig, old["sig"]), "sec": sec.strip() not in ("", "--"),
+                      "cur": inuse == "*" or old["cur"]}
+    return dict(sorted(nets.items(), key=lambda kv: (not kv[1]["cur"], -kv[1]["sig"])))
+
+
+VPN_TYPES = ("wireguard", "vpn")      # WireGuard (Cloudflare WARP) и VPN-плагины NM (L2TP «office»)
+
+
+def vpn_list():
+    """[(имя, uuid, состояние)] — состояние: activated / activating / deactivating / ''"""
+    active = {}
+    for line in nm("-t", "-f", "UUID,STATE", "connection", "show", "--active").stdout.splitlines():
+        f = split_t(line)
+        if len(f) >= 2:
+            active[f[0]] = f[1]
+    out = []
+    for line in nm("-t", "-f", "NAME,UUID,TYPE", "connection", "show").stdout.splitlines():
+        name, uuid, typ = (split_t(line) + ["", ""])[:3]
+        if typ in VPN_TYPES:
+            out.append((name, uuid, active.get(uuid, "")))
+    return sorted(out, key=lambda v: v[0].lower())
+
+
+def saved_profile(ssid):
+    for line in nm("-t", "-f", "NAME,TYPE", "connection", "show").stdout.splitlines():
+        name, typ = (split_t(line) + [""])[:2]
+        if typ == "802-11-wireless" and \
+                nm("-g", "802-11-wireless.ssid", "connection", "show", name).stdout.strip() == ssid:
+            return name
+    return None
+
+
+def wifi_device():
+    for line in nm("-t", "-f", "DEVICE,TYPE", "device").stdout.splitlines():
+        f = split_t(line)
+        if f[1:2] == ["wifi"]:
+            return f[0]
+    return None
+
+
+def main():
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk, GLib, Gtk, Pango
+
+    GLib.set_prgname(APP_ID)
+    Gdk.set_program_class(APP_ID)
+    css = Gtk.CssProvider()
+    css.load_from_data(CSS.encode())
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    win = Gtk.Window(title="Wi-Fi")
+    win.set_default_size(WIDTH, -1)
+    win.connect("destroy", Gtk.main_quit)
+    win.connect("key-press-event",
+                lambda _w, ev: (win.close(), True)[1] if ev.keyval == Gdk.KEY_Escape else False)
+
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    outer.set_border_width(14)
+    win.add(outer)
+
+    head = Gtk.Box(spacing=8)
+    title = Gtk.Label(label="wi-fi", xalign=0)
+    title.get_style_context().add_class("title")
+    head.pack_start(title, True, True, 0)
+    switch = Gtk.Switch()
+    switch.set_valign(Gtk.Align.CENTER)
+    head.pack_end(switch, False, False, 0)
+    outer.pack_start(head, False, False, 0)
+
+    status = Gtk.Label(xalign=0)
+    status.get_style_context().add_class("status")
+    status.set_ellipsize(Pango.EllipsizeMode.END)
+    outer.pack_start(status, False, False, 0)
+
+    section = Gtk.Label(label="сети", xalign=0)
+    section.get_style_context().add_class("section")
+    outer.pack_start(section, False, False, 0)
+
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scroll.set_propagate_natural_height(True)
+    scroll.set_max_content_height(LIST_H)
+    outer.pack_start(scroll, False, False, 0)
+    listbox = Gtk.ListBox()
+    listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+    listbox.set_activate_on_single_click(True)
+    scroll.add(listbox)
+
+    vpn_title = Gtk.Label(label="vpn", xalign=0)
+    vpn_title.get_style_context().add_class("section")
+    outer.pack_start(vpn_title, False, False, 0)
+    vpn_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    outer.pack_start(vpn_box, False, False, 0)
+
+    sep = Gtk.Box()
+    sep.get_style_context().add_class("sep")
+    outer.pack_start(sep, False, False, 4)
+    link = Gtk.Button(label="настройки сети…")
+    link.get_style_context().add_class("link")
+    link.set_halign(Gtk.Align.END)
+
+    def open_settings(_b):
+        subprocess.Popen(SETTINGS, start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        win.close()
+    link.connect("clicked", open_settings)
+    outer.pack_start(link, False, False, 0)
+
+    st = {"nets": {}, "busy": False, "pw_row": None, "quiet": False,
+          "vpn": {}, "vpn_busy": {}, "vpn_err": {}}   # vpn: uuid → (row, switch, state_label)
+
+    def set_status(text, err=False):
+        status.set_text(text)
+        status.set_visible(bool(text))
+        (status.get_style_context().add_class if err else
+         status.get_style_context().remove_class)("err")
+
+    def in_thread(fn, done):
+        """fn() в фоне, done(результат) — в потоке GTK"""
+        def run():
+            r = fn()
+            GLib.idle_add(lambda: (done(r), False)[1])
+        threading.Thread(target=run, daemon=True).start()
+
+    def fill(nets):
+        if st["busy"] or st["pw_row"] is not None:
+            return   # не перестраиваем список, пока подключаемся или вводят пароль
+        st["nets"] = nets
+        for c in listbox.get_children():
+            listbox.remove(c)
+        for ssid, n in nets.items():
+            row = Gtk.ListBoxRow()
+            row.ssid = ssid
+            box = Gtk.Box(spacing=10)
+            bar = Gtk.Label(label=BARS[min(n["sig"] // 20, 4)])
+            bar.get_style_context().add_class("bar")
+            if n["sig"] < 35:
+                bar.get_style_context().add_class("weak")
+            box.pack_start(bar, False, False, 0)
+            name = Gtk.Label(label=ssid, xalign=0)
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            box.pack_start(name, True, True, 0)
+            if n["cur"]:
+                chk = Gtk.Label(label="󰄬")
+                chk.get_style_context().add_class("check")
+                box.pack_end(chk, False, False, 0)
+                row.get_style_context().add_class("current")
+            if n["sec"]:
+                lock = Gtk.Label(label="󰌾")
+                lock.get_style_context().add_class("lock")
+                box.pack_end(lock, False, False, 0)
+            row.add(box)
+            listbox.add(row)
+        if not nets:
+            row = Gtk.ListBoxRow()
+            row.ssid = None
+            row.set_activatable(False)
+            lab = Gtk.Label(label="ищу сети…" if switch.get_active() else "Wi-Fi выключен",
+                            xalign=0)
+            lab.get_style_context().add_class("status")
+            row.add(lab)
+            listbox.add(row)
+        listbox.show_all()
+        fit_list()
+
+    def fit_list():
+        """высота списка по числу строк (но не больше LIST_H — дальше прокрутка)"""
+        h = sum(r.get_preferred_height()[1] + 2 for r in listbox.get_children())
+        scroll.set_min_content_height(min(LIST_H, max(h, 30)))
+        win.resize(WIDTH, 1)
+
+    VPN_STATE = {"activated": "подключён", "activating": "подключаюсь…",
+                 "deactivating": "отключаюсь…", "": "выключен"}
+
+    def vpn_toggle(sw, _p, uuid, name):
+        if st["quiet"]:
+            return
+        on = sw.get_active()
+        st["vpn_busy"][uuid] = "activating" if on else "deactivating"
+        st["vpn_err"].pop(uuid, None)
+        paint_vpn(uuid, st["vpn_busy"][uuid])
+
+        def work():
+            r = nm("connection", "up" if on else "down", uuid, timeout=60)
+            err = (r.stderr or r.stdout).strip().splitlines()
+            return r.returncode == 0, err[-1] if err else ""
+
+        def done(res):
+            ok, msg = res
+            st["vpn_busy"].pop(uuid, None)
+            if not ok:
+                # «Error: Connection activation failed: …» — оставить суть
+                st["vpn_err"][uuid] = msg.split(": ")[-1][:60] or "не удалось"
+            refresh()
+        in_thread(work, done)
+
+    def paint_vpn(uuid, state):
+        row, sw, lab = st["vpn"][uuid]
+        err = st["vpn_err"].get(uuid)
+        lab.set_text(err or VPN_STATE.get(state, state))
+        (lab.get_style_context().add_class if err else
+         lab.get_style_context().remove_class)("err")
+        (row.get_style_context().add_class if state == "activated" else
+         row.get_style_context().remove_class)("vpn-on")
+        want = state in ("activated", "activating")
+        if sw.get_active() != want:
+            st["quiet"] = True
+            sw.set_active(want)
+            st["quiet"] = False
+
+    def fill_vpn(vpns):
+        if [u for _, u, _ in vpns] != list(st["vpn"]):
+            for c in vpn_box.get_children():
+                vpn_box.remove(c)
+            st["vpn"] = {}
+            for name, uuid, _state in vpns:
+                row = Gtk.Box(spacing=10)
+                row.get_style_context().add_class("vpn-row")
+                icon = Gtk.Label(label="󰦝")
+                icon.get_style_context().add_class("vpn-icon")
+                row.pack_start(icon, False, False, 0)
+                v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+                nl = Gtk.Label(label=name, xalign=0)
+                nl.set_ellipsize(Pango.EllipsizeMode.END)
+                v.pack_start(nl, False, False, 0)
+                sl = Gtk.Label(xalign=0)
+                sl.get_style_context().add_class("vpn-state")
+                v.pack_start(sl, False, False, 0)
+                row.pack_start(v, True, True, 0)
+                sw = Gtk.Switch()
+                sw.set_valign(Gtk.Align.CENTER)
+                sw.connect("notify::active", vpn_toggle, uuid, name)
+                row.pack_end(sw, False, False, 0)
+                vpn_box.pack_start(row, False, False, 0)
+                st["vpn"][uuid] = (row, sw, sl)
+            vpn_box.show_all()
+            vpn_title.set_visible(bool(vpns))
+            win.resize(WIDTH, 1)
+        for _name, uuid, state in vpns:
+            paint_vpn(uuid, st["vpn_busy"].get(uuid, state))
+
+    def reload():
+        on = nm("radio", "wifi").stdout.strip() == "enabled"
+        return on, (scan() if on else {}), vpn_list()
+
+    def apply(res):
+        on, nets, vpns = res
+        fill_vpn(vpns)
+        if switch.get_active() != on:
+            st["quiet"] = True
+            switch.set_active(on)
+            st["quiet"] = False
+        cur = next((s for s, n in nets.items() if n["cur"]), None)
+        if not st["busy"]:
+            set_status(f"подключено к «{cur}»" if cur else ("не подключено" if on else ""))
+        fill(nets)
+
+    def refresh():
+        in_thread(reload, apply)
+        return False
+
+    def connect_done(ssid, ok, msg):
+        st["busy"] = False
+        if ok:
+            set_status(f"подключено к «{ssid}»")
+        else:
+            set_status(msg or f"не удалось подключиться к «{ssid}»", err=True)
+        refresh()
+
+    def do_connect(ssid, password=None):
+        st["busy"] = True
+        set_status(f"подключаюсь к «{ssid}»…")
+
+        def work():
+            prof = saved_profile(ssid)
+            if prof:
+                if password:
+                    nm("connection", "modify", prof, "wifi-sec.psk", password)
+                r = nm("connection", "up", prof, timeout=60)
+            elif password:
+                r = nm("device", "wifi", "connect", ssid, "password", password, timeout=60)
+            else:
+                r = nm("device", "wifi", "connect", ssid, timeout=60)
+            err = (r.stderr or r.stdout).strip().splitlines()
+            return r.returncode == 0, bool(prof), err[-1] if err else ""
+
+        def done(res):
+            ok, had_profile, msg = res
+            n = st["nets"].get(ssid, {})
+            if not ok and n.get("sec") and not password:
+                st["busy"] = False
+                set_status("нужен пароль" if not had_profile else "пароль не подошёл", err=True)
+                ask_password(ssid)
+                return
+            connect_done(ssid, ok, msg if not ok else "")
+        in_thread(work, done)
+
+    def ask_password(ssid):
+        row = next((r for r in listbox.get_children() if getattr(r, "ssid", None) == ssid), None)
+        if row is None:
+            return
+        close_password()
+        pw = Gtk.ListBoxRow()
+        pw.ssid = None
+        pw.set_activatable(False)
+        entry = Gtk.Entry()
+        entry.set_visibility(False)
+        entry.set_placeholder_text(f"пароль «{ssid}», Enter")
+
+        def go(_e):
+            text = entry.get_text()
+            if text:
+                close_password()
+                do_connect(ssid, text)
+        entry.connect("activate", go)
+        pw.add(entry)
+        listbox.insert(pw, row.get_index() + 1)
+        pw.show_all()
+        st["pw_row"] = pw
+        win.present()
+        entry.grab_focus()
+        fit_list()
+
+    def close_password():
+        if st["pw_row"] is not None:
+            listbox.remove(st["pw_row"])
+            st["pw_row"] = None
+            fit_list()
+
+    def on_row(_lb, row):
+        ssid = getattr(row, "ssid", None)
+        if not ssid or st["busy"]:
+            return
+        n = st["nets"][ssid]
+        if n["cur"]:
+            st["busy"] = True
+            set_status(f"отключаюсь от «{ssid}»…")
+            in_thread(lambda: nm("device", "disconnect", wifi_device() or "wlan0"),
+                      lambda _r: connect_done(ssid, True, "") or set_status("не подключено"))
+            return
+        close_password()
+        if n["sec"] and saved_profile(ssid) is None:
+            ask_password(ssid)
+        else:
+            do_connect(ssid)
+    listbox.connect("row-activated", on_row)
+
+    def on_switch(sw, _p):
+        if st["quiet"]:
+            return
+        on = sw.get_active()
+        set_status("включаю Wi-Fi…" if on else "")
+        in_thread(lambda: nm("radio", "wifi", "on" if on else "off"),
+                  lambda _r: GLib.timeout_add(1500 if on else 200, refresh))
+    switch.connect("notify::active", on_switch)
+
+    # сначала мгновенно из кэша, потом пересканировать и показать свежий список
+    apply(reload())
+
+    def rescan():
+        nm("device", "wifi", "rescan")
+        return True
+
+    res = None
+    if "--daemon" in sys.argv:
+        # постоянный процесс (hypr_popup.py): список уже на экране из прошлого раза,
+        # при показе обновляем его в фоне и пересканируем
+        from hypr_popup import Resident
+
+        def on_show():
+            close_password()
+            refresh()
+            in_thread(rescan, lambda _r: GLib.timeout_add(2500, refresh))
+        res = Resident(win, kind="wifi", app_id=APP_ID, place="cursor", panel=True,
+                       focus=False, on_show=on_show)
+    else:
+        in_thread(rescan, lambda _r: GLib.timeout_add(2500, refresh))
+    # пока окно открыто — обновлять список раз в 8 с (спрятанное не трогаем)
+    GLib.timeout_add_seconds(8, lambda: ((res is None or res.visible) and refresh(), True)[1])
+
+    if res:
+        res.start()
+    else:
+        win.show_all()
+    set_status(status.get_text())
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

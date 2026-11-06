@@ -1,0 +1,87 @@
+/* Catppuccin Mocha */
+* {
+  font-family: "IBM Plex Mono", "JetBrainsMono Nerd Font", "DejaVu Sans Mono", monospace;  /* Nerd Font — для значков */
+  font-size: 15px;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+}
+
+window#waybar {
+  background: transparent;
+  color: #cdd6f4;
+}
+
+.modules-left, .modules-center, .modules-right {
+  background: rgba(30, 30, 46, 0.85);
+  border-radius: 10px;
+  padding: 0 6px;
+}
+
+#workspaces button {
+  padding: 0 9px;
+  margin: 3px 1px;
+  color: #a6adc8;
+  background: transparent;
+  border-radius: 7px;
+  font-weight: bold;
+  min-width: 18px;
+}
+/* активный — заметная подложка */
+#workspaces button.active {
+  color: #1e1e2e;
+  background: #89b4fa;
+}
+/* есть окна, но не активен */
+#workspaces button:not(.empty):not(.active) {
+  color: #cdd6f4;
+  background: rgba(205, 214, 244, 0.10);
+}
+/* пустой постоянный — приглушённый */
+#workspaces button.empty  { color: #585b70; background: transparent; font-weight: normal; }
+#workspaces button.urgent { color: #1e1e2e; background: #f38ba8; }
+#workspaces button:hover  { color: #cdd6f4; background: rgba(205, 214, 244, 0.20); }
+
+#window { color: #a6adc8; padding: 0 10px; }
+/* на пустом столе (нет окна) — прячем и подложку центрального блока, иначе висит пустой «обрубок» */
+window#waybar.empty .modules-center { background: transparent; padding: 0; }
+window#waybar.empty #window { background: transparent; padding: 0; }
+
+#language, #pulseaudio, #backlight, #network, #cpu, #memory,
+#temperature, #battery, #tray, #clock {
+  padding: 0 9px;
+}
+
+#language    { color: #f9e2af; }
+#pulseaudio  { color: #89dceb; }
+#backlight   { color: #f9e2af; }
+#network     { color: #a6e3a1; font-family: "JetBrainsMono Nerd Font"; font-size: 17px; }
+#cpu         { color: #89b4fa; }
+#memory      { color: #cba6f7; }
+#temperature { color: #fab387; }
+#battery     { color: #a6e3a1; }
+#clock       { color: #cdd6f4; font-weight: bold; }
+
+#pulseaudio.muted        { color: #6c7086; }
+#network.disconnected    { color: #f38ba8; }
+#temperature.critical    { color: #f38ba8; }
+#battery.half            { color: #f9e2af; }   /* 25–50% — жёлтый */
+#battery { font-size: 17px; }               /* значок без цифр — крупнее, как Wi-Fi */
+#battery.warning         { color: #fab387; }
+#battery.critical        { color: #f38ba8; }
+#battery.charging, #battery.plugged { color: #a6e3a1; }   /* на зарядке — всегда зелёный */
+
+#battery.critical:not(.charging) {
+  background: #f38ba8;
+  color: #1e1e2e;
+  border-radius: 8px;
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink { to { background: transparent; color: #f38ba8; } }
+
+tooltip {
+  background: rgba(30, 30, 46, 0.96);
+  border: 1px solid #45475a;
+  border-radius: 8px;
+}
+tooltip label { color: #cdd6f4; }

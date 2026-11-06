@@ -1,0 +1,25 @@
+#!/bin/bash
+# Проверка после входа в Hyprland. Запускать ИЗ сеанса Hyprland.
+echo "=== ошибки конфига ==="
+hyprctl configerrors 2>/dev/null || echo "hyprctl недоступен — ты не в сеансе Hyprland?"
+echo
+echo "=== соответствие cardN <-> драйвер (важно после обновлений ядра) ==="
+for c in /sys/class/drm/card[0-9]; do
+  [ -e "$c/device/driver" ] && printf "  %-6s -> %s\n" "$(basename $c)" "$(basename $(readlink -f $c/device/driver))"
+done
+echo "  выбрано при входе (~/.config/hypr/gpu.conf, пишет hypr-gpu-select):"
+sed 's/^/    /' ~/.config/hypr/gpu.conf 2>/dev/null || echo "    gpu.conf нет — GPU выбирает Aquamarine"
+echo "  первым идёт nvidia, если Acer был подключён при входе, иначе amdgpu"
+echo
+echo "=== рендерер композитора (ожидается AMD/radeonsi) ==="
+glxinfo 2>/dev/null | grep -i 'OpenGL renderer' || echo "  нет glxinfo"
+echo "=== рендерер через обёртку nv (ожидается NVIDIA) ==="
+nv glxinfo 2>/dev/null | grep -i 'OpenGL renderer' || echo "  нет glxinfo"
+echo
+echo "=== мониторы ==="
+hyprctl monitors 2>/dev/null | grep -E '^Monitor' || true
+echo
+echo "=== фоновые процессы из exec-once ==="
+for p in waybar mako hyprpaper hypridle nm-applet; do
+  printf "  %-12s %s\n" "$p" "$(pgrep -x $p >/dev/null && echo работает || echo НЕ ЗАПУЩЕН)"
+done

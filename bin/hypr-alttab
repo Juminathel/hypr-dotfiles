@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""Alt+Tab как в Windows: держишь Alt, жмёшь Tab — по центру экрана панель со значками
+окон, рамка ходит по ним; отпустил Alt — переход к выбранному окну.
+
+Порядок — по недавности использования, по всем столам и мониторам. Список снимается
+в начале и не меняется, пока Alt зажат.
+
+Панель — постоянно запущенный процесс на GTK3 (`hypr-alttab daemon`, exec-once через
+hypr-respawn): GTK, список программ и значки уже загружены, поэтому панель появляется
+сразу. Раньше она запускалась заново на каждый Alt+Tab, и пол-секунды уходило на старт
+Python и GTK. Окно панели без фокуса (правило alttab-overlay в hyprland.conf), так что
+сочетания клавиш продолжает ловить Hyprland. Команды пишут файл состояния и будят панель
+сигналами: SIGUSR1 — показать/обновить, SIGUSR2 — спрятать. Если демона нет, панель
+запускается разово, как раньше.
+
+Вызывается из hyprland.conf (Alt+Tab → start, дальше submap alttab):
+  start [prev] — снять список, включить submap, показать панель
+  next | prev  — Tab / Shift+Tab при зажатом Alt
+  end          — Alt отпущен: перейти к выбранному окну
+  cancel       — Esc: ничего не менять
+"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+RUN = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+STATE = os.path.join(RUN, "hypr-alttab.json")
+PIDFILE = os.path.join(RUN, "hypr-alttab.pid")
+APP_ID = "hypr-alttab"
+SHOW_DELAY_MS = 40    # быстрый Alt+Tab (туда-обратно) панель не показывает, как в Windows
+PER_ROW = 7
+
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+def load():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def save(st):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f)
+    os.replace(tmp, STATE)
+
+
+def daemon_pid():
+    try:
+        pid = int(open(PIDFILE).read())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def poke(sig):
+    pid = daemon_pid()
+    if pid:
+        try:
+            os.kill(pid, sig)
+            return True
+        except OSError:
+            pass
+    return False
+
+
+def finish(st, focus_selected):
+    try:
+        os.remove(STATE)
+    except OSError:
+        pass
+    hypr("dispatch", "submap", "reset")
+    poke(signal.SIGUSR2)
+    if st and focus_selected:
+        w = st["wins"][st["i"]]
+        hypr("--batch", f"dispatch focuswindow address:{w['address']} ; dispatch alterzorder top")
+
+
+# ---------- панель ----------
+
+def panel(persistent):
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+
+    if persistent:
+        other = daemon_pid()
+        if other and other != os.getpid():
+            return   # уже запущен
+        with open(PIDFILE, "w") as f:
+            f.write(str(os.getpid()))
+
+    GLib.set_prgname(APP_ID)
+    Gdk.set_program_class(APP_ID)
+    css = Gtk.CssProvider()
+    css.load_from_data("""
+    * { font-family: "IBM Plex Mono"; font-size: 10pt; color: #cdd6f4;
+        outline: none; box-shadow: none; text-shadow: none; }
+    window, window:backdrop { background-color: rgba(30, 30, 46, 0.96); }
+    .tile, .tile:backdrop { padding: 10px; border-radius: 12px; border: 2px solid transparent;
+        background-color: transparent; }
+    .tile.sel, .tile.sel:backdrop { background-color: #45475a; border-color: #89b4fa; }
+    .name { color: #cdd6f4; }
+    .ws { color: #7f849c; font-size: 9pt; }
+    .head { color: #89b4fa; font-weight: bold; font-size: 11pt; }
+    """.encode())
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    theme = Gtk.IconTheme.get_default()
+
+    apps = {"by_wm": {}, "at": 0}
+
+    def refresh_apps():
+        """Список .desktop — раз в 10 минут, чтобы подхватывать новые программы."""
+        if time.time() - apps["at"] < 600:
+            return
+        by_wm = {}
+        for app in Gio.AppInfo.get_all():
+            if isinstance(app, Gio.DesktopAppInfo):
+                wm = app.get_startup_wm_class()
+                if wm:
+                    by_wm.setdefault(wm.lower(), app)
+        apps.update(by_wm=by_wm, at=time.time())
+        cache.clear()
+
+    cache = {}
+
+    def app_for(cls):
+        """class окна → (gicon или имя значка, подпись)"""
+        if cls in cache:
+            return cache[cls]
+        app = None
+        for cand in (cls, cls.lower()):
+            try:
+                app = Gio.DesktopAppInfo.new(cand + ".desktop")
+            except TypeError:
+                app = None
+            if app:
+                break
+        app = app or apps["by_wm"].get(cls.lower())
+        icon = app.get_icon() if app else None
+        if icon is None:
+            icon = next((n for n in (cls, cls.lower(), cls.split(".")[-1].lower())
+                         if theme.has_icon(n)), "application-x-executable")
+        name = (app.get_name() if app else None) or cls.split(".")[-1]
+        cache[cls] = (icon, name)
+        return cache[cls]
+
+    win = Gtk.Window(title="Alt+Tab")
+    win.set_decorated(False)
+    win.set_accept_focus(False)
+    win.set_focus_on_map(False)
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    outer.set_border_width(16)
+    win.add(outer)
+    head = Gtk.Label(xalign=0.5)
+    head.get_style_context().add_class("head")
+    head.set_ellipsize(Pango.EllipsizeMode.END)
+    head.set_max_width_chars(70)
+    outer.pack_start(head, False, False, 0)
+    holder = Gtk.Box()
+    holder.set_halign(Gtk.Align.CENTER)
+    outer.pack_start(holder, False, False, 0)
+
+    ui = {"gen": None, "tiles": [], "wins": [], "show_id": 0}
+
+    def build(st):
+        for child in holder.get_children():
+            holder.remove(child)
+        grid = Gtk.Grid(column_spacing=6, row_spacing=6)
+        holder.add(grid)
+        tiles = []
+        for k, w in enumerate(st["wins"]):
+            icon, name = app_for(w["class"])
+            tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            tile.get_style_context().add_class("tile")
+            tile.set_size_request(120, -1)
+            img = (Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.DIALOG) if isinstance(icon, str)
+                   else Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG))
+            img.set_pixel_size(64)
+            tile.pack_start(img, False, False, 0)
+            lab = Gtk.Label(label=name)
+            lab.get_style_context().add_class("name")
+            lab.set_ellipsize(Pango.EllipsizeMode.END)
+            lab.set_max_width_chars(13)
+            tile.pack_start(lab, False, False, 0)
+            ws = Gtk.Label(label=f"стол {w['ws']}" if w["ws"] <= 10 else "ноутбук")
+            ws.get_style_context().add_class("ws")
+            tile.pack_start(ws, False, False, 0)
+            grid.attach(tile, k % PER_ROW, k // PER_ROW, 1, 1)
+            tiles.append(tile)
+        ui.update(gen=st.get("gen"), tiles=tiles, wins=st["wins"])
+        outer.show_all()
+        win.resize(1, 1)   # ужаться под новое число значков
+
+    def select(i):
+        for k, t in enumerate(ui["tiles"]):
+            ctx = t.get_style_context()
+            (ctx.add_class if k == i else ctx.remove_class)("sel")
+        w = ui["wins"][i]
+        head.set_text(w["title"] or w["class"])
+
+    def hide(*_):
+        if ui["show_id"]:
+            GLib.source_remove(ui["show_id"])
+            ui["show_id"] = 0
+        win.hide()
+        ui["gen"] = None
+        if not persistent:
+            os._exit(0)
+        return True
+
+    def update(*_):
+        st = load()
+        if not st:
+            return hide()
+        if st.get("gen") != ui["gen"]:
+            build(st)
+            if not win.get_visible() and not ui["show_id"]:
+                def show():
+                    ui["show_id"] = 0
+                    if load():
+                        win.show()
+                    return False
+                ui["show_id"] = GLib.timeout_add(SHOW_DELAY_MS, show)
+        select(st["i"])
+        return True
+
+    def watchdog():
+        if win.get_visible() and not load():   # подстраховка: состояние пропало — спрятать
+            hide()
+        return True
+
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, update)
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, hide)
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda *_: os._exit(0))
+    GLib.timeout_add(300, watchdog)
+
+    refresh_apps()
+    if persistent:
+        GLib.timeout_add_seconds(60, lambda: (refresh_apps(), True)[1])
+    else:
+        GLib.timeout_add_seconds(60, lambda: os._exit(0))
+        if not load():
+            os._exit(0)
+        GLib.idle_add(lambda: (update(), False)[1])
+    Gtk.main()
+
+
+# ---------- команды ----------
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
+    if cmd == "daemon":
+        panel(persistent=True)
+        return
+    if cmd == "overlay":
+        panel(persistent=False)
+        return
+
+    if cmd == "start":
+        old = load()
+        if old:
+            finish(old, False)
+        wins = [c for c in json.loads(hypr("clients", "-j") or "[]")
+                if c.get("mapped") and not c.get("hidden") and c["workspace"]["id"] > 0
+                and c["class"].lower() != APP_ID]
+        wins.sort(key=lambda c: c.get("focusHistoryID", 1 << 30))
+        wins = [{"address": c["address"], "class": c["class"] or "?", "title": c["title"],
+                 "ws": c["workspace"]["id"]} for c in wins]
+        if len(wins) < 2:
+            hypr("dispatch", "submap", "reset")
+            return
+        i = len(wins) - 1 if (len(sys.argv) > 2 and sys.argv[2] == "prev") else 1
+        save({"wins": wins, "i": i, "gen": time.time()})
+        hypr("dispatch", "submap", "alttab")   # дальше Tab/Shift+Tab/отпускание Alt — в submap
+        if not poke(signal.SIGUSR1):
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "overlay"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        return
+
+    st = load()
+    if cmd in ("end", "cancel") or st is None:
+        finish(st, cmd == "end")
+        return
+
+    st["i"] = (st["i"] + (1 if cmd == "next" else -1)) % len(st["wins"])
+    save(st)
+    poke(signal.SIGUSR1)
+
+
+if __name__ == "__main__":
+    main()

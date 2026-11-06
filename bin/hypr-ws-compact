@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+"""Сдвигает рабочие столы без дыр: опустел 3-й — содержимое 4-го едет на 3-й, 5-го на 4-й и т.д.
+
+Слушает события Hyprland (socket2) и после закрытия/переноса окна перенумеровывает
+непустые столы. У каждого монитора свой блок (главный монитор 1–10, ноутбук 11, см. hypr-ws),
+сдвиг идёт внутри блока и между мониторами ничего не переносит.
+Acer — главный (столы 1–10), ноутбук при нём держит один стол 11 (pin_laptop).
+Без Acer главный — ноутбук: его окна со стола 11 переезжают на обычные столы 1–10 (laptop_main).
+Спецстолы (scratchpad, id < 0) не трогает. Заодно показывает окошко раскладки EN/RU (layout_osd)
+(управление живыми обоями wall_pause выключено — паузу делает сам waywallen, см. WALL_ENABLED). Запуск: exec-once в hyprland.conf.
+"""
+import glob, json, os, re, select, signal, socket, subprocess, time
+
+TRIGGERS = (b"closewindow>>", b"movewindowv2>>", b"destroyworkspacev2>>",
+            b"workspacev2>>", b"createworkspacev2>>", b"moveworkspacev2>>", b"monitoraddedv2>>",
+            b"monitorremoved")
+WALL_TRIGGERS = (b"openwindow>>", b"focusedmon>>", b"activespecial>>")   # для wall_pause
+BLOCK = 10
+ACER = "Acer Technologies RL242Y E"   # главный монитор: столы 1–10
+LAPTOP = "eDP-1"                      # при подключённом Acer — один стол 11
+LAPTOP_WS = 11
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+PAUSE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-ws-compact.pause")
+
+def paused():
+    """hypr-ws-insert только что вставил пустой стол — секунду ничего не сдвигаем."""
+    try:
+        return time.time() - os.path.getmtime(PAUSE) < 1.0
+    except OSError:
+        return False
+
+def compact():
+    if paused():
+        return
+    wins = [w for w in json.loads(hypr("clients", "-j") or "[]")
+            if w["workspace"]["id"] > 0]
+    # пустой стол, который сейчас на экране, тоже считается занятым: его создали нарочно
+    # (Super+N). Как только с него уйдут, следующее событие закроет дыру.
+    shown = {m["activeWorkspace"]["id"] for m in json.loads(hypr("monitors", "-j") or "[]")
+             if m["activeWorkspace"]["id"] > 0}
+    remap = {}
+    for block in {(i - 1) // BLOCK for i in {w["workspace"]["id"] for w in wins} | shown}:
+        start = block * BLOCK + 1
+        used = sorted({w["workspace"]["id"] for w in wins
+                       if (w["workspace"]["id"] - 1) // BLOCK == block}
+                      | {i for i in shown if (i - 1) // BLOCK == block})
+        remap.update({old: new for new, old in enumerate(used, start) if old != new})
+    if not remap:
+        return
+    # по возрастанию: целевой стол всегда меньше исходного и уже свободен
+    cmds = [f"dispatch movetoworkspacesilent {remap[w['workspace']['id']]},address:{w['address']}"
+            for w in sorted(wins, key=lambda w: w["workspace"]["id"])
+            if w["workspace"]["id"] in remap]
+    # мониторы, на которых виден сдвинутый стол, едут вместе с ним; фокус возвращаем
+    mons = json.loads(hypr("monitors", "-j") or "[]")
+    focused = next((m["name"] for m in mons if m["focused"]), None)
+    for m in mons:
+        ws = m["activeWorkspace"]["id"]
+        if ws in remap:
+            cmds += [f"dispatch focusmonitor {m['name']}", f"dispatch workspace {remap[ws]}"]
+    if focused and any(c.startswith("dispatch focusmonitor") for c in cmds):
+        cmds.append(f"dispatch focusmonitor {focused}")
+    hypr("--batch", " ; ".join(cmds))
+
+def pin_laptop():
+    """При подключённом Acer (главный, столы 1–10) держит на ноутбуке только стол 11.
+
+    Столы 1–10, оказавшиеся на ноутбуке (например, Acer подключили после входа), целиком
+    переезжают на Acer. Окна с прочих столов ноутбука (12+, созданных свайпом) — на 11.
+    Без Acer ничего не делает: тогда все столы на ноутбуке.
+    """
+    mons = json.loads(hypr("monitors", "-j") or "[]")
+    acer = next((m for m in mons if m["description"].startswith(ACER)), None)
+    laptop = next((m for m in mons if m["name"] == LAPTOP), None)
+    if not acer or not laptop:
+        return
+    wss = json.loads(hypr("workspaces", "-j") or "[]")
+    on_laptop = {w["id"] for w in wss if w["monitorID"] == laptop["id"] and w["id"] > 0}
+    to_acer = {i for i in on_laptop if i <= BLOCK}
+    extra = on_laptop - to_acer - {LAPTOP_WS}
+    home = next((w["monitorID"] for w in wss if w["id"] == LAPTOP_WS), laptop["id"])
+    if not to_acer and not extra and home == laptop["id"] \
+            and laptop["activeWorkspace"]["id"] == LAPTOP_WS:
+        return
+    cmds = [f"dispatch moveworkspacetomonitor {i} {acer['name']}" for i in sorted(to_acer)]
+    cmds += [f"dispatch movetoworkspacesilent {LAPTOP_WS},address:{w['address']}"
+             for w in json.loads(hypr("clients", "-j") or "[]")
+             if w["workspace"]["id"] in extra]
+    if home != laptop["id"]:
+        cmds.append(f"dispatch moveworkspacetomonitor {LAPTOP_WS} {LAPTOP}")
+    focused = next((m["name"] for m in mons if m["focused"]), acer["name"])
+    cmds += [f"dispatch focusmonitor {LAPTOP}", f"dispatch workspace {LAPTOP_WS}",
+             f"dispatch focusmonitor {focused}"]
+    hypr("--batch", " ; ".join(cmds))
+
+def laptop_main():
+    """Acer отключён — ноутбук становится главным монитором со столами 1–10.
+
+    Окна со столов 11+ (его «отдельного» стола при Acer) переезжают на первый свободный стол
+    после занятых в 1–10, и ноутбук переходит туда же, если показывал стол 11+.
+    Стол 11 после этого пустеет и исчезает (он не persistent), на панели не висит второй «1».
+    """
+    mons = json.loads(hypr("monitors", "-j") or "[]")
+    if any(m["description"].startswith(ACER) for m in mons):
+        return
+    laptop = next((m for m in mons if m["name"] == LAPTOP), None)
+    if not laptop:
+        return
+    wins = json.loads(hypr("clients", "-j") or "[]")
+    extra = [w for w in wins if w["workspace"]["id"] > BLOCK]
+    shown = laptop["activeWorkspace"]["id"]
+    if not extra and shown <= BLOCK:
+        return
+    used = {w["workspace"]["id"] for w in wins if 0 < w["workspace"]["id"] <= BLOCK}
+    target = min(max(used, default=0) + 1, BLOCK) if extra else (min(used) if used else 1)
+    cmds = [f"dispatch movetoworkspacesilent {target},address:{w['address']}" for w in extra]
+    if shown > BLOCK:
+        cmds += [f"dispatch focusmonitor {LAPTOP}", f"dispatch workspace {target}"]
+    hypr("--batch", " ; ".join(cmds))
+
+# ---------- живые обои только при открытом foot ----------
+# Обои waywallen рисуют отдельные процессы-рендереры, по одному на монитор, и рисуют они на
+# встроенной AMD (Hyprland — на NVIDIA), грузя её почти на 100%. Если на видимом столе монитора
+# нет окна foot — его рендереру шлём SIGSTOP (картинка застывает на последнем кадре, нагрузка
+# уходит), появился foot — SIGCONT. Проверено: waywallen паузу переживает.
+# Какой рендерер рисует какой монитор — из журнала демона waywallen: «display register: ИМЯ»,
+# затем «display N registered», затем «pick(UUID, display N)». UUID есть в командной строке
+# рендерера (--ipc …/renderer-UUID). Рендерер, общий для двух мониторов, идёт, если нужен хоть одному.
+
+WALL_CLASSES = {"foot", "footclient", "org.codeberg.dnkl.foot"}
+WALL_LOGS = os.path.expanduser("~/.var/app/org.waywallen.waywallen/.local/state/waywallen/logs/daemon")
+RE_REGISTER = re.compile(r"display register: (\S+) \(")
+RE_REGISTERED = re.compile(r"display (\d+) registered with router")
+RE_PICK = re.compile(r"pick\(([0-9a-f-]{36}), display (\d+)\)")
+RE_UUID = re.compile(rb"renderer-([0-9a-f-]{36})")
+RE_DAEMON_START = re.compile(r"ws control plane listening")
+# Мониторы, где foot на столе = пауза (а не «идут»): на ноутбуке foot открыт всегда.
+WALL_COVER_PAUSE = {"eDP-1"}
+wall = {"files": {}, "pending": [], "disp": {}, "d2r": {}, "stopped": set(), "slow": set()}
+
+def wall_read_logs():
+    """дочитать журналы waywallen с прошлого раза (по смещению в каждом файле)"""
+    for f in sorted(glob.glob(os.path.join(WALL_LOGS, "waywallen*.log"))):
+        try:
+            size = os.path.getsize(f)
+            off = wall["files"].get(f, 0)
+            if size < off:
+                off = 0
+            if size == off:
+                continue
+            with open(f, "rb") as fh:
+                fh.seek(off)
+                raw = fh.read()
+            # только целые строки: журнал дописывается прямо сейчас, и половинка строки
+            # «display register: …» сбила бы очередь и перепутала мониторы
+            cut = raw.rfind(b"\n") + 1
+            if not cut:
+                continue
+            wall["files"][f] = off + cut
+            chunk = raw[:cut].decode(errors="replace")
+        except OSError:
+            continue
+        for line in chunk.splitlines():
+            if RE_DAEMON_START.search(line):
+                # waywallen перезапустился — номера мониторов назначаются заново
+                wall["pending"].clear(); wall["disp"].clear(); wall["d2r"].clear()
+                continue
+            m = RE_REGISTER.search(line)
+            if m:
+                wall["pending"].append(m.group(1))
+                continue
+            m = RE_REGISTERED.search(line)
+            if m and wall["pending"]:
+                wall["disp"][m.group(1)] = wall["pending"].pop(0)
+                continue
+            m = RE_PICK.search(line)
+            if m:
+                wall["d2r"][m.group(2)] = m.group(1)
+
+def wall_renderers():
+    """{uuid: pid} запущенных рендереров waywallen"""
+    out = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            cmd = open(f"/proc/{d}/cmdline", "rb").read()
+        except OSError:
+            continue
+        arg0 = cmd.split(b"\0", 1)[0]
+        if arg0.endswith(b"-renderer") and b"waywallen" in arg0 and b"--ipc" in cmd:
+            m = RE_UUID.search(cmd)
+            if m:
+                out[m.group(1).decode()] = int(d)
+    return out
+
+# режимы рендерера: чистый стол — как обычно, есть foot — ~10 кадров, иначе — пауза
+FULL, SLOW, STOP = 2, 1, 0
+SLOW_PERIOD, SLOW_RUN = 0.100, 0.034   # из каждых 100 мс работает 34 мс: при 30 к/с = 1 кадр
+
+# Выключено 04.11.2026: паузу теперь делает сам waywallen (настройка «любое окно — пауза»,
+# [global.auto_replay] any_window = "pause" в его config.toml). Внешний SIGSTOP с ней конфликтует.
+# Включить обратно: WALL_ENABLED = True.
+WALL_ENABLED = False
+
+def wall_pause():
+    if not WALL_ENABLED:
+        return
+    wall_read_logs()
+    rend = wall_renderers()
+    if not rend:
+        wall["slow"] = set()
+        return
+    mons = json.loads(hypr("monitors", "-j") or "[]")
+    shown = {m["name"]: m["activeWorkspace"]["id"] for m in mons}
+    wins = [w for w in json.loads(hypr("clients", "-j") or "[]") if w["mapped"] and not w["hidden"]]
+    busy = {w["workspace"]["id"] for w in wins}
+    has_foot = {w["workspace"]["id"] for w in wins if w["class"] in WALL_CLASSES}
+    # ноутбук: foot там есть всегда и тайлингом занимает всё свободное место — обои за ним
+    # почти не видно (alpha 0.92). Есть foot — пауза, без подсчёта площади.
+    covered = {m["name"] for m in mons
+               if m["name"] in WALL_COVER_PAUSE and m["activeWorkspace"]["id"] in has_foot}
+    want = {}   # uuid -> режим (общий рендерер — по самому «живому» из его мониторов)
+    for disp, uuid in wall["d2r"].items():
+        name = wall["disp"].get(disp)
+        if name in shown:
+            ws = shown[name]
+            # SLOW (свой ~10 к/с через SIGSTOP/SIGCONT) замерили — почти не экономит
+            # (26 Вт против 28), рендерер догоняет пропущенное. Поэтому foot = обычный ход,
+            # а частоту снижаем настройкой самого waywallen (fps в config.toml, общая для всех).
+            mode = FULL if ws not in busy or ws in has_foot else STOP
+            if name in covered:
+                mode = STOP
+            want[uuid] = max(want.get(uuid, STOP), mode)
+    slow = set()
+    for uuid, pid in rend.items():
+        mode = want.get(uuid, FULL)   # не знаем, чей рендерер, — не трогаем (пусть идёт)
+        if mode == SLOW:
+            slow.add(pid)             # дальше его ведёт поток wall_throttle
+            wall["stopped"].add(pid)
+            continue
+        try:
+            os.kill(pid, signal.SIGCONT if mode == FULL else signal.SIGSTOP)
+        except OSError:
+            continue
+        (wall["stopped"].discard if mode == FULL else wall["stopped"].add)(pid)
+    wall["slow"] = slow
+
+def wall_throttle():
+    """~10 кадров для рендереров в режиме SLOW: короткими окнами пускаем и останавливаем.
+    Рендерер рисует 30 к/с, за 34 мс из каждых 100 успевает ровно один кадр."""
+    while True:
+        slow = wall.get("slow") or set()
+        if not slow:
+            time.sleep(0.25)
+            continue
+        for pid in slow:
+            try:
+                os.kill(pid, signal.SIGCONT)
+            except OSError:
+                pass
+        time.sleep(SLOW_RUN)
+        for pid in wall.get("slow") or ():   # режим мог смениться — останавливаем только SLOW
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except OSError:
+                pass
+        time.sleep(SLOW_PERIOD - SLOW_RUN)
+
+def wall_resume_all(*_):
+    """при выходе — разморозить всё, иначе обои остались бы стоять"""
+    wall["slow"] = set()
+    for pid in list(wall["stopped"]):
+        try:
+            os.kill(pid, signal.SIGCONT)
+        except OSError:
+            pass
+    os._exit(0)
+
+# ---------- окошко раскладки ----------
+# Раньше был отдельный процесс hypr-layout-osd (~6 МБ — почти всё это сам Python).
+# Он слушал тот же поток событий, поэтому окошко теперь показывает этот процесс.
+# Само окошко рисует mako: раздел [app-name=hypr-layout-osd] в ~/.config/mako/config.
+
+OSD_APP = "hypr-layout-osd"
+OSD_NAMES = {"english": "EN", "russian": "RU"}
+osd = {"id": "0", "last": None, "t": 0.0}
+
+def layout_osd(lines):
+    """activelayout>>КЛАВИАТУРА,РАСКЛАДКА — показать «EN»/«RU» по центру экрана.
+    Событие приходит от каждой клавиатуры (встроенная, мышь, виртуальные) — показываем раз."""
+    for line in lines:
+        if not line.startswith(b"activelayout>>"):
+            continue
+        layout = line.split(b">>", 1)[1].decode(errors="replace").rsplit(",", 1)[-1]
+        low = layout.lower()
+        text = next((v for k, v in OSD_NAMES.items() if k in low), layout[:2].upper())
+        now = time.monotonic()
+        if text == osd["last"] and now - osd["t"] < 0.3:
+            continue
+        osd["last"], osd["t"] = text, now
+        r = subprocess.run(["notify-send", "-a", OSD_APP, "-p", "-r", osd["id"], "-t", "700", text],
+                           capture_output=True, text=True)
+        osd["id"] = r.stdout.strip() or "0"
+
+def main():
+    path = os.path.join(os.environ["XDG_RUNTIME_DIR"], "hypr",
+                        os.environ["HYPRLAND_INSTANCE_SIGNATURE"], ".socket2.sock")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(path)
+    signal.signal(signal.SIGTERM, wall_resume_all)
+    signal.signal(signal.SIGINT, wall_resume_all)
+    if WALL_ENABLED:
+        import threading
+        threading.Thread(target=wall_throttle, daemon=True).start()
+    pin_laptop()
+    laptop_main()
+    compact()
+    wall_pause()
+    buf = b""
+    last_wall = time.monotonic()
+    while True:
+        # не реже раза в 5 с перепроверить обои: сменили картинку — новый рендерер.
+        # По времени, а не «5 с без событий»: события (заголовки окон) идут почти непрерывно.
+        if time.monotonic() - last_wall > 5:
+            wall_pause()
+            last_wall = time.monotonic()
+        if not select.select([sock], [], [], 5)[0]:
+            continue
+        data = sock.recv(65536)
+        if not data:
+            wall_resume_all()   # Hyprland завершился
+        buf += data
+        *lines, buf = buf.split(b"\n")
+        layout_osd(lines)
+        if not any(l.startswith(TRIGGERS + WALL_TRIGGERS) for l in lines):
+            continue
+        # наши же переносы порождают пачку событий — даём им пройти и съедаем
+        # (кроме смены раскладки: её окошко показываем и из этой пачки)
+        time.sleep(0.15)
+        while select.select([sock], [], [], 0)[0]:
+            chunk = sock.recv(65536)
+            if not chunk:
+                wall_resume_all()
+            buf += chunk
+            *drained, buf = buf.split(b"\n")
+            layout_osd(drained)
+        if any(l.startswith(TRIGGERS) for l in lines):
+            pin_laptop()
+            laptop_main()
+            compact()
+        wall_pause()
+        last_wall = time.monotonic()
+
+if __name__ == "__main__":
+    main()

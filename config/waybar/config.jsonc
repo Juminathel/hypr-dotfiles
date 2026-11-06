@@ -1,0 +1,110 @@
+{
+  // Иконки НЕ из Nerd Fonts: в репозиториях Ubuntu их нет, и глифы стали бы
+  // квадратиками. Использованы только символы, наличие которых проверено
+  // в уже установленных шрифтах (DejaVu Sans Mono), плюс текстовые метки.
+  // Хочешь настоящие иконки — см. блок в конце файла.
+
+  "layer": "top",
+  "position": "top",
+  "height": 32,
+  "spacing": 4,
+  "margin-top": 4,
+  "margin-left": 8,
+  "margin-right": 8,
+
+  "modules-left":   ["hyprland/workspaces", "hyprland/submap"],
+  "modules-center": ["hyprland/window"],
+  "modules-right":  ["hyprland/language", "pulseaudio", "backlight", "network",
+                     "memory", "temperature", "battery", "tray", "clock"],
+
+  "hyprland/workspaces": {
+    // Показываем номер воркспейса. Воркспейсы 1-5 видны всегда, даже пустые,
+    // чтобы было понятно, куда можно перейти; 6-10 появляются по мере создания.
+    // Acer — главный, на нём столы 1–10 (1–5 всегда видны — правилами workspace в hyprland.conf).
+    // У ноутбука при подключённом Acer один стол 11, подписан как 1.
+    "format": "{icon}",
+    "format-icons": { "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "9", "10": "10", "11": "1", "12": "2", "13": "3", "14": "4", "15": "5", "16": "6", "17": "7", "18": "8", "19": "9", "20": "10" },
+    "all-outputs": false,
+    "on-click": "activate",
+    "persistent-workspaces": {}   // стол 11 держит hypr-ws-compact (pin_laptop), без Acer его нет
+  },
+
+  "hyprland/window": { "format": "{title}", "max-length": 60, "separate-outputs": true },
+
+  "hyprland/language": {
+    "format": "{short}",
+    "on-click": "hyprctl switchxkblayout current next"
+  },
+
+  "pulseaudio": {
+    "format": "{icon} {volume}%",
+    "format-icons": { "default": ["󰕿", "󰖀", "󰕾"] },
+    "format-muted": "󰝟",
+    "format-bluetooth": "󰂰 {volume}%",
+    "on-click": "$HOME/.local/bin/hypr-popup-show volume",   // микшер выпадает под значком
+    "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+    "scroll-step": 5
+  },
+
+  "backlight": {
+    "device": "amdgpu_bl2",
+    "format": "☀ {percent}%",
+    "on-scroll-up": "hypr-brightness +5",
+    "on-scroll-down": "hypr-brightness -5"
+  },
+
+  "network": {
+    // Только значок; имя сети, сигнал и IP — во всплывающей подсказке
+    "interface": "wlp4s0",
+    "format-wifi": "󰖩",
+    "format-ethernet": "󰈀",
+    "format-disconnected": "󰖪",
+    "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
+    "on-click": "$HOME/.local/bin/hypr-popup-show wifi",   // окно сетей под значком; ПКМ — настройки KDE
+    "on-click-right": "kcmshell6 kcm_networkmanagement",
+    "interval": 5
+  },
+
+  // CPU убран с панели; btop теперь открывается кликом по RAM
+  "memory": { "format": "󰍛 {used:0.1f}G", "interval": 5, "tooltip-format": "{used:0.1f}G / {total:0.1f}G ({percentage}%)", "on-click": "foot --app-id=btop-popup -e btop" },
+
+  "temperature": {
+    "thermal-zone": 0,
+    "critical-threshold": 85,
+    "format": "{temperatureC}°C",
+    "interval": 5
+  },
+
+  "battery": {
+    "bat": "BAT1",
+    "adapter": "ADP1",
+    // Процента нет: уровень видно по заполненности значка и цвету
+    // (зелёный > 50%, жёлтый 25–50%, оранжевый < 25%, красный < 12%).
+    // Ниже 25% процент появляется сам. Точная цифра и время — в подсказке.
+    "states": { "half": 50, "warning": 25, "critical": 12 },
+    "format": "{icon}",
+    "format-warning": "{icon} {capacity}%",
+    "format-critical": "{icon} {capacity}%",
+    "format-icons": ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"],
+    "format-charging": "󰂄",
+    "format-plugged": "󰚥",
+    "tooltip-format": "{capacity}% · {timeTo}\n{power} Вт"
+  },
+
+  "tray": { "icon-size": 16, "spacing": 8 },
+
+  "clock": {
+    "format": "{:%H:%M}",
+    "format-alt": "{:%a, %d %B %Y}",
+    "tooltip-format": "<tt><small>{calendar}</small></tt>",
+    "calendar": { "mode": "month", "weeks-pos": "right" }
+  }
+
+  // ── ХОЧЕШЬ НАСТОЯЩИЕ ИКОНКИ ──────────────────────────────────────────
+  // Nerd Font нужно ставить руками, в apt его нет:
+  //   mkdir -p ~/.local/share/fonts && cd ~/.local/share/fonts
+  //   curl -fLO https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip
+  //   unzip -o JetBrainsMono.zip && fc-cache -fv
+  // Затем в style.css поставь font-family: "JetBrainsMono Nerd Font"
+  // и верни в форматы глифы вида "󰖩 {essid}", "󰻠 {usage}%", "󰂄 {capacity}%".
+}

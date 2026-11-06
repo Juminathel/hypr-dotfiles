@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Новый пустой рабочий стол сразу справа от текущего (столы 1–10 главного монитора).
+
+  hypr-ws-insert go    — перейти на него (Super+N)
+  hypr-ws-insert move  — перенести туда активное окно и перейти (Super+Shift+N)
+
+Если следующий стол пуст — просто идём на него. Если занят — все столы правее текущего
+сдвигаются на +1 (3→4, 4→5, …), а освободившийся текущий+1 становится новым.
+Главный монитор — Acer, если подключён, иначе ноутбук. С ноутбука при Acer работаем со столами Acer.
+
+hypr-ws-compact снова сдвинул бы столы, чтобы закрыть дыру. Поэтому ставим ему паузу
+(файл PAUSE), а пустой стол, который сейчас на экране, он считает занятым.
+"""
+import json
+import os
+import subprocess
+import sys
+
+ACER = "Acer Technologies RL242Y E"
+FIRST, LAST = 1, 10
+PAUSE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-ws-compact.pause")
+
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+def notify(msg):
+    subprocess.run(["notify-send", "-a", "Hyprland", "Рабочие столы", msg])
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else "go"
+    mons = json.loads(hypr("monitors", "-j") or "[]")
+    focused = next((m for m in mons if m["focused"]), None)
+    main_mon = (next((m for m in mons if m["description"].startswith(ACER)), None)
+                or next((m for m in mons if m["name"] == "eDP-1"), None)
+                or focused)   # другой компьютер — главный тот, где фокус
+    if not main_mon:
+        return
+    cur = main_mon["activeWorkspace"]["id"]
+    if not FIRST <= cur <= LAST:
+        return
+    target = cur + 1
+    if target > LAST:
+        notify(f"Справа от {cur} места нет: столы только {FIRST}–{LAST}")
+        return
+
+    wins = [c for c in json.loads(hypr("clients", "-j") or "[]")
+            if FIRST <= c["workspace"]["id"] <= LAST]
+    by_ws = {}
+    for c in wins:
+        by_ws.setdefault(c["workspace"]["id"], []).append(c["address"])
+
+    cmds = []
+    if by_ws.get(target):
+        right = sorted(ws for ws in by_ws if ws > cur)
+        if right[-1] >= LAST:
+            notify(f"Некуда сдвигать: стол {LAST} занят")
+            return
+        # с самого правого, чтобы столы не сливались друг с другом
+        for ws in reversed(right):
+            cmds += [f"dispatch movetoworkspacesilent {ws + 1},address:{a}" for a in by_ws[ws]]
+
+    active = json.loads(hypr("activewindow", "-j") or "{}")
+    if focused and focused["name"] != main_mon["name"]:
+        cmds.insert(0, f"dispatch focusmonitor {main_mon['name']}")
+    if action == "move" and active.get("address"):
+        cmds.append(f"dispatch movetoworkspacesilent {target},address:{active['address']}")
+    cmds.append(f"dispatch workspace {target}")
+    if action == "move" and active.get("address"):
+        cmds.append(f"dispatch focuswindow address:{active['address']}")
+
+    with open(PAUSE, "w"):
+        pass
+    hypr("--batch", " ; ".join(cmds))
+
+
+if __name__ == "__main__":
+    main()
