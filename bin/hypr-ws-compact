@@ -4,8 +4,9 @@
 Слушает события Hyprland (socket2) и после закрытия/переноса окна перенумеровывает
 непустые столы. У каждого монитора свой блок (главный монитор 1–10, ноутбук 11, см. hypr-ws),
 сдвиг идёт внутри блока и между мониторами ничего не переносит.
-Acer — главный (столы 1–10), ноутбук при нём держит один стол 11 (pin_laptop).
-Без Acer главный — ноутбук: его окна со стола 11 переезжают на обычные столы 1–10 (laptop_main).
+Главный — внешний монитор (Acer, а если его нет — любой другой внешний, например LG ULTRAWIDE):
+столы 1–10, ноутбук при нём держит один стол 11 (pin_laptop).
+Без внешнего главный — ноутбук: его окна со стола 11 переезжают на обычные столы 1–10 (laptop_main).
 Спецстолы (scratchpad, id < 0) не трогает. Заодно показывает окошко раскладки EN/RU (layout_osd)
 (управление живыми обоями wall_pause выключено — паузу делает сам waywallen, см. WALL_ENABLED). Запуск: exec-once в hyprland.conf.
 """
@@ -22,6 +23,11 @@ LAPTOP_WS = 11
 
 def hypr(*args):
     return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+def main_external(mons):
+    """главный внешний монитор: Acer, если подключён, иначе первый внешний (не ноутбук)"""
+    return (next((m for m in mons if m["description"].startswith(ACER)), None)
+            or next((m for m in mons if m["name"] != LAPTOP and not m.get("disabled")), None))
 
 PAUSE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-ws-compact.pause")
 
@@ -73,7 +79,7 @@ def pin_laptop():
     Без Acer ничего не делает: тогда все столы на ноутбуке.
     """
     mons = json.loads(hypr("monitors", "-j") or "[]")
-    acer = next((m for m in mons if m["description"].startswith(ACER)), None)
+    acer = main_external(mons)          # имя «acer» историческое: любой главный внешний
     laptop = next((m for m in mons if m["name"] == LAPTOP), None)
     if not acer or not laptop:
         return
@@ -104,7 +110,7 @@ def laptop_main():
     Стол 11 после этого пустеет и исчезает (он не persistent), на панели не висит второй «1».
     """
     mons = json.loads(hypr("monitors", "-j") or "[]")
-    if any(m["description"].startswith(ACER) for m in mons):
+    if main_external(mons):
         return
     laptop = next((m for m in mons if m["name"] == LAPTOP), None)
     if not laptop:

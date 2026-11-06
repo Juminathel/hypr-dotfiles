@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Рабочие столы 1–10 живут на главном мониторе: Acer, если он подключён, иначе ноутбук.
-# У ноутбука при подключённом Acer один постоянный стол 11, он не переключается
+# Рабочие столы 1–10 живут на главном мониторе: Acer, если он подключён, иначе любой другой
+# внешний (LG ULTRAWIDE и т.п.), иначе ноутбук.
+# У ноутбука при внешнем мониторе один постоянный стол 11, он не переключается
 # (его держит hypr-ws-compact, pin_laptop).
 # Использование: hypr-ws go N   — перейти на стол N (фокус уходит на главный монитор)
 #                hypr-ws move N — перенести туда активное окно
@@ -11,6 +12,7 @@ main=$(hyprctl -j monitors | python3 -c '
 import json, sys
 mons = json.load(sys.stdin)
 acer = [m["name"] for m in mons if m["description"].startswith("Acer Technologies RL242Y E")]
+acer += [m["name"] for m in mons if m["name"] != "eDP-1" and not m["disabled"]]   # любой внешний
 laptop = [m["name"] for m in mons if m["name"] == "eDP-1"]
 # другой компьютер (нет ни Acer, ни ноутбука) — главный тот, где фокус
 other = [m["name"] for m in mons if m["focused"]] or [m["name"] for m in mons]
