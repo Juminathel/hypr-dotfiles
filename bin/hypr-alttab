@@ -1,56 +1,282 @@
 #!/usr/bin/env python3
 """Alt+Tab как в Windows: держишь Alt, жмёшь Tab — по центру экрана панель со значками
-окон, рамка ходит по ним; отпустил Alt — переход к выбранному окну.
+окон, рамка ходит по ним; отпустил Alt — переход к выбранному окну. Мышью: навёл — рамка
+переехала, щёлкнул — перешёл к окну.
+
+На плитках — уменьшенные снимки самих окон (класс WinCapture, протокол Hyprland
+toplevel-export: окно снимается целиком, даже с другого стола). Снимки делаются по ходу,
+~15–25 мс на окно: панель сразу показывает прошлые снимки (или значок), свежие подменяют их.
 
 Порядок — по недавности использования, по всем столам и мониторам. Список снимается
 в начале и не меняется, пока Alt зажат.
 
-Панель — постоянно запущенный процесс на GTK3 (`hypr-alttab daemon`, exec-once через
-hypr-respawn): GTK, список программ и значки уже загружены, поэтому панель появляется
-сразу. Раньше она запускалась заново на каждый Alt+Tab, и пол-секунды уходило на старт
-Python и GTK. Окно панели без фокуса (правило alttab-overlay в hyprland.conf), так что
-сочетания клавиш продолжает ловить Hyprland. Команды пишут файл состояния и будят панель
-сигналами: SIGUSR1 — показать/обновить, SIGUSR2 — спрятать. Если демона нет, панель
-запускается разово, как раньше.
+Всё делает один постоянно запущенный процесс (`hypr-alttab daemon`, exec-once через
+hypr-respawn): GTK и значки уже загружены, с Hyprland он говорит напрямую через сокет.
+Бинды в hyprland.conf вызывают крошечный sh-скрипт hypr-alttab-ctl, который пишет одно
+слово в FIFO. Раньше на каждое нажатие запускался Python (~40 мс) и hyprctl (~10 мс
+за вызов) — отсюда была заметная задержка.
 
-Вызывается из hyprland.conf (Alt+Tab → start, дальше submap alttab):
-  start [prev] — снять список, включить submap, показать панель
-  next | prev  — Tab / Shift+Tab при зажатом Alt
-  end          — Alt отпущен: перейти к выбранному окну
-  cancel       — Esc: ничего не менять
+Окно панели не берёт фокус при появлении (правило alttab-overlay в hyprland.conf), а Tab
+и отпускание Alt ловит Hyprland в submap alttab. Команды в FIFO:
+  start | start-prev — снять список, включить submap, показать панель
+  next | prev        — Tab / Shift+Tab при зажатом Alt
+  end                — Alt отпущен: перейти к выбранному окну
+  cancel             — Esc: ничего не менять
 """
 import json
+import mmap
 import os
 import signal
-import subprocess
+import socket
+import struct
 import sys
 import time
 
 RUN = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-STATE = os.path.join(RUN, "hypr-alttab.json")
+FIFO = os.path.join(RUN, "hypr-alttab.fifo")
 PIDFILE = os.path.join(RUN, "hypr-alttab.pid")
+HYPR_SOCK = os.path.join(RUN, "hypr", os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", ""), ".socket.sock")
 APP_ID = "hypr-alttab"
 SHOW_DELAY_MS = 40    # быстрый Alt+Tab (туда-обратно) панель не показывает, как в Windows
+HIDE_DELAY_MS = 50    # см. hide(): сначала прозрачный кадр, потом закрытие окна
 PER_ROW = 7
+THUMB_W, THUMB_H = 200, 125
 
 
-def hypr(*args):
-    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
-
-
-def load():
+def hypr(req):
+    """Запрос в сокет Hyprland напрямую (~1 мс вместо ~10 мс на запуск hyprctl)."""
     try:
-        with open(STATE) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect(HYPR_SOCK)
+            s.sendall(req.encode())
+            out = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                out += chunk
+            return out.decode("utf-8", "replace")
+    except OSError:
+        return ""
 
 
-def save(st):
-    tmp = STATE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(st, f)
-    os.replace(tmp, STATE)
+def batch(*cmds):
+    return hypr("[[BATCH]]" + " ; ".join(cmds))
+
+
+class WinCapture:
+    """Снимки окон через hyprland_toplevel_export_v1 (окно снимается целиком, даже с другого
+    стола). Свой минимальный Wayland-клиент: отдельное соединение, только нужные запросы.
+    Снимки идут по очереди и асинхронно — on_thumb(address, cairo-поверхность) по готовности."""
+
+    FMT_OK = (0, 1)                          # wl_shm ARGB8888 / XRGB8888 — раскладка как у cairo
+    FMT_SWAP = (0x34324258, 0x34324241)      # XBGR8888 / ABGR8888 — поменять R и B
+
+    def __init__(self, GLib, on_thumb, tw, th):
+        self.GLib, self.on_thumb, self.tw, self.th = GLib, on_thumb, tw, th
+        self.sock = None
+        self.queue = []
+        self.cur = None
+        self.connect()
+
+    # --- провод ---
+    def connect(self):
+        self.close()
+        try:
+            path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""),
+                                os.environ.get("WAYLAND_DISPLAY", "wayland-1"))
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(path)
+            self.sock, self.buf, self.next_id, self.free = s, b"", 4, []
+            self.globals, self.synced = {}, False
+            self.send(1, 1, struct.pack("<I", 2))     # wl_display.get_registry → id 2
+            self.send(1, 0, struct.pack("<I", 3))     # wl_display.sync → id 3
+            s.settimeout(1)
+            while not self.synced:
+                self.read()
+            s.settimeout(None)
+            self.shm = self.bind("wl_shm", 1)
+            self.mgr = self.bind("hyprland_toplevel_export_manager_v1", 1)
+            self.watch = self.GLib.io_add_watch(s.fileno(), self.GLib.PRIORITY_DEFAULT,
+                                                self.GLib.IO_IN | self.GLib.IO_HUP, self.on_io)
+        except (OSError, KeyError, struct.error):
+            self.close()
+
+    def close(self):
+        if getattr(self, "watch", 0):
+            self.GLib.source_remove(self.watch)
+        self.watch = 0
+        if self.sock:
+            self.sock.close()
+        self.sock = None
+        self.drop_cur()
+        self.queue = []
+
+    def new_id(self):
+        if self.free:
+            return self.free.pop()
+        self.next_id += 1
+        return self.next_id - 1
+
+    def send(self, obj, op, payload=b"", fds=None):
+        msg = struct.pack("<IHH", obj, op, 8 + len(payload)) + payload
+        if fds:
+            socket.send_fds(self.sock, [msg], fds)
+        else:
+            self.sock.sendall(msg)
+
+    def bind(self, iface, version):
+        name = self.globals[iface]
+        new = self.new_id()
+        s = iface.encode() + b"\0"
+        s += b"\0" * (-len(s) % 4)
+        self.send(2, 0, struct.pack("<II", name, len(iface) + 1) + s + struct.pack("<II", version, new))
+        return new
+
+    def read(self):
+        data = self.sock.recv(65536)
+        if not data:
+            raise OSError("wayland: соединение закрыто")
+        self.buf += data
+        while len(self.buf) >= 8:
+            obj, op, size = struct.unpack_from("<IHH", self.buf)
+            if size < 8 or len(self.buf) < size:
+                break
+            body, self.buf = self.buf[8:size], self.buf[size:]
+            self.event(obj, op, body)
+
+    def on_io(self, _fd, cond):
+        try:
+            if cond & self.GLib.IO_HUP:
+                raise OSError("hup")
+            self.read()
+        except OSError:
+            self.watch = 0
+            self.close()
+            return False
+        return True
+
+    # --- события ---
+    def event(self, obj, op, body):
+        if obj == 1:
+            if op == 0:                       # wl_display.error
+                raise OSError("wayland error")
+            if op == 1:                       # delete_id — номер можно переиспользовать
+                self.free.append(struct.unpack_from("<I", body)[0])
+        elif obj == 2 and op == 0:            # wl_registry.global
+            name, slen = struct.unpack_from("<II", body)
+            self.globals[body[8:8 + slen - 1].decode()] = name
+        elif obj == 3:
+            self.synced = True
+        elif self.cur and obj == self.cur["frame"]:
+            c = self.cur
+            if op == 0:                       # buffer(format, width, height, stride)
+                c["fmt"], c["w"], c["h"], c["stride"] = struct.unpack_from("<IIII", body)
+            elif op == 2:                     # flags
+                c["flags"] = struct.unpack_from("<I", body)[0]
+            elif op == 6:                     # buffer_done → даём буфер и просим копию
+                self.copy()
+            elif op == 3:                     # ready
+                self.ready()
+            elif op == 4:                     # failed
+                self.finish_cur()
+
+    # --- снимки ---
+    def request(self, addresses):
+        """Заменить очередь: список адресов окон ('0x…') в порядке важности."""
+        self.queue = list(addresses)
+        if not self.sock:
+            self.connect()
+        if self.sock and not self.cur:
+            self.advance()
+
+    def stop(self):
+        self.queue = []
+
+    def advance(self):
+        while self.queue and not self.cur and self.sock:
+            addr = self.queue.pop(0)
+            try:
+                frame = self.new_id()
+                self.cur = {"addr": addr, "frame": frame, "flags": 0, "t": time.monotonic()}
+                # capture_toplevel(frame, overlay_cursor=0, handle = младшие 32 бита адреса)
+                self.send(self.mgr, 0, struct.pack("<IiI", frame, 0, int(addr, 16) & 0xFFFFFFFF))
+                self.cur["timer"] = self.GLib.timeout_add(400, self.timeout, frame)
+            except OSError:
+                self.close()
+
+    def timeout(self, frame):
+        if self.cur and self.cur["frame"] == frame:
+            self.cur["timer"] = 0
+            self.finish_cur()
+        return False
+
+    def copy(self):
+        c = self.cur
+        if c.get("fmt") not in self.FMT_OK + self.FMT_SWAP or not c["w"] or not c["h"]:
+            return self.finish_cur()
+        size = c["stride"] * c["h"]
+        c["fd"] = os.memfd_create("hypr-alttab")
+        os.ftruncate(c["fd"], size)
+        c["pool"], c["buffer"] = self.new_id(), self.new_id()
+        self.send(self.shm, 0, struct.pack("<Ii", c["pool"], size), fds=[c["fd"]])
+        self.send(c["pool"], 0, struct.pack("<IiiiiI", c["buffer"], 0, c["w"], c["h"], c["stride"], c["fmt"]))
+        self.send(c["frame"], 0, struct.pack("<Ii", c["buffer"], 1))   # copy(buffer, ignore_damage)
+
+    def ready(self):
+        c = self.cur
+        surf = None
+        try:
+            mm = mmap.mmap(c["fd"], c["stride"] * c["h"])
+            src = cairo.ImageSurface.create_for_data(mm, cairo.FORMAT_RGB24, c["w"], c["h"], c["stride"])
+            k = min(self.tw / c["w"], self.th / c["h"], 1)
+            w, h = max(1, round(c["w"] * k)), max(1, round(c["h"] * k))
+            surf = cairo.ImageSurface(cairo.FORMAT_RGB24, w, h)
+            cr = cairo.Context(surf)
+            if c["flags"] & 1:                # y_invert
+                cr.translate(0, h)
+                cr.scale(1, -1)
+            cr.scale(w / c["w"], h / c["h"])
+            cr.set_source_surface(src, 0, 0)
+            cr.get_source().set_filter(cairo.FILTER_GOOD)
+            cr.paint()
+            del cr
+            src.finish()
+            del src
+            mm.close()
+            if c["fmt"] in self.FMT_SWAP:
+                surf.flush()
+                raw = bytearray(surf.get_data())
+                raw[0::4], raw[2::4] = raw[2::4], raw[0::4]
+                surf = cairo.ImageSurface.create_for_data(raw, cairo.FORMAT_RGB24, w, h, surf.get_stride())
+        except Exception:
+            surf = None
+        addr = c["addr"]
+        self.finish_cur()
+        if surf is not None:
+            self.on_thumb(addr, surf)
+
+    def drop_cur(self):
+        c, self.cur = self.cur, None
+        if c:
+            if c.get("timer"):
+                self.GLib.source_remove(c["timer"])
+            if "fd" in c:
+                os.close(c["fd"])
+        return c
+
+    def finish_cur(self):
+        c = self.drop_cur()
+        if c and self.sock:
+            try:
+                if "buffer" in c:
+                    self.send(c["buffer"], 0)     # wl_buffer.destroy
+                    self.send(c["pool"], 1)       # wl_shm_pool.destroy
+                self.send(c["frame"], 1)          # frame.destroy
+            except OSError:
+                self.close()
+        self.advance()
 
 
 def daemon_pid():
@@ -62,43 +288,29 @@ def daemon_pid():
         return None
 
 
-def poke(sig):
-    pid = daemon_pid()
-    if pid:
-        try:
-            os.kill(pid, sig)
-            return True
-        except OSError:
-            pass
-    return False
+def daemon():
+    import stat
 
-
-def finish(st, focus_selected):
-    try:
-        os.remove(STATE)
-    except OSError:
-        pass
-    hypr("dispatch", "submap", "reset")
-    poke(signal.SIGUSR2)
-    if st and focus_selected:
-        w = st["wins"][st["i"]]
-        hypr("--batch", f"dispatch focuswindow address:{w['address']} ; dispatch alterzorder top")
-
-
-# ---------- панель ----------
-
-def panel(persistent):
+    global cairo
+    import cairo
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
     from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
-    if persistent:
-        other = daemon_pid()
-        if other and other != os.getpid():
-            return   # уже запущен
-        with open(PIDFILE, "w") as f:
-            f.write(str(os.getpid()))
+    other = daemon_pid()
+    if other and other != os.getpid():
+        return   # уже запущен
+    with open(PIDFILE, "w") as f:
+        f.write(f"{os.getpid()}\n")
+    try:
+        if not stat.S_ISFIFO(os.stat(FIFO).st_mode):
+            os.remove(FIFO)
+            os.mkfifo(FIFO, 0o600)
+    except FileNotFoundError:
+        os.mkfifo(FIFO, 0o600)
+    # O_RDWR: у FIFO всегда есть «писатель», чтение не упирается в EOF после каждой команды
+    fifo_fd = os.open(FIFO, os.O_RDWR | os.O_NONBLOCK)
 
     GLib.set_prgname(APP_ID)
     Gdk.set_program_class(APP_ID)
@@ -106,12 +318,14 @@ def panel(persistent):
     css.load_from_data("""
     * { font-family: "IBM Plex Mono"; font-size: 10pt; color: #cdd6f4;
         outline: none; box-shadow: none; text-shadow: none; }
-    window, window:backdrop { background-color: rgba(30, 30, 46, 0.96); }
+    window, window:backdrop { background-color: rgba(69, 71, 90, 0.97); }
+    window.gone, window.gone:backdrop { background-color: transparent; }
     .tile, .tile:backdrop { padding: 10px; border-radius: 12px; border: 2px solid transparent;
         background-color: transparent; }
-    .tile.sel, .tile.sel:backdrop { background-color: #45475a; border-color: #89b4fa; }
+    .tile.sel, .tile.sel:backdrop { background-color: #6c7086; border-color: #89b4fa; }
     .name { color: #cdd6f4; }
-    .ws { color: #7f849c; font-size: 9pt; }
+    .ws { color: #bac2de; font-size: 9pt; }
+    .thumb { border-radius: 6px; }
     .head { color: #89b4fa; font-weight: bold; font-size: 11pt; }
     """.encode())
     Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
@@ -119,11 +333,12 @@ def panel(persistent):
     theme = Gtk.IconTheme.get_default()
 
     apps = {"by_wm": {}, "at": 0}
+    cache = {}
 
     def refresh_apps():
         """Список .desktop — раз в 10 минут, чтобы подхватывать новые программы."""
         if time.time() - apps["at"] < 600:
-            return
+            return True
         by_wm = {}
         for app in Gio.AppInfo.get_all():
             if isinstance(app, Gio.DesktopAppInfo):
@@ -132,8 +347,7 @@ def panel(persistent):
                     by_wm.setdefault(wm.lower(), app)
         apps.update(by_wm=by_wm, at=time.time())
         cache.clear()
-
-    cache = {}
+        return True
 
     def app_for(cls):
         """class окна → (gicon или имя значка, подпись)"""
@@ -172,132 +386,214 @@ def panel(persistent):
     holder.set_halign(Gtk.Align.CENTER)
     outer.pack_start(holder, False, False, 0)
 
-    ui = {"gen": None, "tiles": [], "wins": [], "show_id": 0}
+    # st: None — панель неактивна; иначе wins (список окон), i (выбранное), tiles, show_id
+    st = {"wins": None, "i": 0, "tiles": [], "imgs": {}, "show_id": 0, "hide_id": 0}
+    thumbs = {}   # адрес окна → последний снимок (cairo); живёт между показами панели
 
-    def build(st):
+    def on_thumb(addr, surf):
+        thumbs[addr] = surf
+        img = st["imgs"].get(addr) if st["wins"] else None
+        if img:
+            img.set_from_surface(surf)
+
+    cap = WinCapture(GLib, on_thumb, THUMB_W, THUMB_H)
+
+    def select(i):
+        st["i"] = i
+        for k, t in enumerate(st["tiles"]):
+            ctx = t.get_style_context()
+            (ctx.add_class if k == i else ctx.remove_class)("sel")
+        w = st["wins"][i]
+        head.set_text(w["title"] or w["class"])
+
+    def on_motion(_w, _ev, k):
+        # именно движение, а не «вход»: панель, возникшая под неподвижным курсором, выбор не сбивает
+        if st["wins"] and st["i"] != k:
+            select(k)
+        return False
+
+    def on_click(_w, ev, k):
+        if st["wins"] and ev.button == 1:
+            select(k)
+            finish(True)
+        return True
+
+    def build():
         for child in holder.get_children():
             holder.remove(child)
         grid = Gtk.Grid(column_spacing=6, row_spacing=6)
         holder.add(grid)
-        tiles = []
+        tiles, imgs = [], {}
+
+        def icon_image(icon, px):
+            im = (Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.DIALOG) if isinstance(icon, str)
+                  else Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG))
+            im.set_pixel_size(px)
+            return im
+
         for k, w in enumerate(st["wins"]):
             icon, name = app_for(w["class"])
             tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             tile.get_style_context().add_class("tile")
-            tile.set_size_request(120, -1)
-            img = (Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.DIALOG) if isinstance(icon, str)
-                   else Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG))
-            img.set_pixel_size(64)
+            # снимок окна; пока его нет — крупный значок программы. Место фиксированное,
+            # чтобы панель не дёргалась, когда снимки подъезжают.
+            if w["address"] in thumbs:
+                img = Gtk.Image.new_from_surface(thumbs[w["address"]])
+            else:
+                img = icon_image(icon, 64)
+            img.set_size_request(THUMB_W, THUMB_H)
+            img.get_style_context().add_class("thumb")
+            imgs[w["address"]] = img
             tile.pack_start(img, False, False, 0)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row.set_halign(Gtk.Align.CENTER)
+            row.pack_start(icon_image(icon, 20), False, False, 0)
             lab = Gtk.Label(label=name)
             lab.get_style_context().add_class("name")
             lab.set_ellipsize(Pango.EllipsizeMode.END)
-            lab.set_max_width_chars(13)
-            tile.pack_start(lab, False, False, 0)
+            lab.set_max_width_chars(18)
+            row.pack_start(lab, False, False, 0)
+            tile.pack_start(row, False, False, 0)
             ws = Gtk.Label(label=f"стол {w['ws']}" if w["ws"] <= 10 else "ноутбук")
             ws.get_style_context().add_class("ws")
             tile.pack_start(ws, False, False, 0)
-            grid.attach(tile, k % PER_ROW, k // PER_ROW, 1, 1)
+            box = Gtk.EventBox()
+            box.set_visible_window(False)
+            box.add_events(Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.BUTTON_PRESS_MASK
+                           | Gdk.EventMask.BUTTON_RELEASE_MASK)
+            box.connect("motion-notify-event", on_motion, k)
+            box.connect("button-release-event", on_click, k)
+            box.add(tile)
+            grid.attach(box, k % PER_ROW, k // PER_ROW, 1, 1)
             tiles.append(tile)
-        ui.update(gen=st.get("gen"), tiles=tiles, wins=st["wins"])
+        st["tiles"], st["imgs"] = tiles, imgs
         outer.show_all()
         win.resize(1, 1)   # ужаться под новое число значков
 
-    def select(i):
-        for k, t in enumerate(ui["tiles"]):
-            ctx = t.get_style_context()
-            (ctx.add_class if k == i else ctx.remove_class)("sel")
-        w = ui["wins"][i]
-        head.set_text(w["title"] or w["class"])
+    def reveal():
+        win.get_style_context().remove_class("gone")
+        outer.set_opacity(1)
 
-    def hide(*_):
-        if ui["show_id"]:
-            GLib.source_remove(ui["show_id"])
-            ui["show_id"] = 0
-        win.hide()
-        ui["gen"] = None
-        if not persistent:
-            os._exit(0)
-        return True
+    def hide():
+        """Спрятать панель. Hyprland гасит закрытое окно плавно (fade, 0.2–0.6 с) — панель
+        «висела» после отпускания Alt. Гасится последний кадр окна, поэтому сначала рисуем
+        полностью прозрачный кадр и только потом закрываем окно — на экране оно пропадает сразу."""
+        if st["show_id"]:
+            GLib.source_remove(st["show_id"])
+            st["show_id"] = 0
+        if win.get_visible() and not st["hide_id"]:
+            win.get_style_context().add_class("gone")
+            outer.set_opacity(0)
 
-    def update(*_):
-        st = load()
-        if not st:
-            return hide()
-        if st.get("gen") != ui["gen"]:
-            build(st)
-            if not win.get_visible() and not ui["show_id"]:
-                def show():
-                    ui["show_id"] = 0
-                    if load():
-                        win.show()
-                    return False
-                ui["show_id"] = GLib.timeout_add(SHOW_DELAY_MS, show)
-        select(st["i"])
-        return True
+            def unmap():
+                st["hide_id"] = 0
+                win.hide()
+                reveal()
+                return False
+            st["hide_id"] = GLib.timeout_add(HIDE_DELAY_MS, unmap)
 
-    def watchdog():
-        if win.get_visible() and not load():   # подстраховка: состояние пропало — спрятать
-            hide()
-        return True
+    def finish(focus_selected):
+        wins, i = st["wins"], st["i"]
+        st["wins"] = None
+        cap.stop()
+        cmds = ["dispatch submap reset"]
+        if wins and focus_selected:
+            cmds += [f"dispatch focuswindow address:{wins[i]['address']}", "dispatch alterzorder top"]
+        elif wins:
+            # отмена: если фокус успел уйти на саму панель (мышь) — вернуть его исходному окну
+            try:
+                active = json.loads(hypr("j/activewindow") or "{}")
+            except ValueError:
+                active = {}
+            if (active.get("class") or "").lower() == APP_ID:
+                cmds.append(f"dispatch focuswindow address:{wins[0]['address']}")
+        batch(*cmds)
+        hide()
 
-    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, update)
-    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, hide)
-    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda *_: os._exit(0))
-    GLib.timeout_add(300, watchdog)
-
-    refresh_apps()
-    if persistent:
-        GLib.timeout_add_seconds(60, lambda: (refresh_apps(), True)[1])
-    else:
-        GLib.timeout_add_seconds(60, lambda: os._exit(0))
-        if not load():
-            os._exit(0)
-        GLib.idle_add(lambda: (update(), False)[1])
-    Gtk.main()
-
-
-# ---------- команды ----------
-
-def main():
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
-    if cmd == "daemon":
-        panel(persistent=True)
-        return
-    if cmd == "overlay":
-        panel(persistent=False)
-        return
-
-    if cmd == "start":
-        old = load()
-        if old:
-            finish(old, False)
-        wins = [c for c in json.loads(hypr("clients", "-j") or "[]")
+    def start(prev):
+        try:
+            clients = json.loads(hypr("j/clients") or "[]")
+        except ValueError:
+            clients = []
+        alive = {c["address"] for c in clients}
+        for addr in [a for a in thumbs if a not in alive]:
+            del thumbs[addr]
+        wins = [c for c in clients
                 if c.get("mapped") and not c.get("hidden") and c["workspace"]["id"] > 0
                 and c["class"].lower() != APP_ID]
         wins.sort(key=lambda c: c.get("focusHistoryID", 1 << 30))
         wins = [{"address": c["address"], "class": c["class"] or "?", "title": c["title"],
                  "ws": c["workspace"]["id"]} for c in wins]
         if len(wins) < 2:
-            hypr("dispatch", "submap", "reset")
+            hypr("dispatch submap reset")
             return
-        i = len(wins) - 1 if (len(sys.argv) > 2 and sys.argv[2] == "prev") else 1
-        save({"wins": wins, "i": i, "gen": time.time()})
-        hypr("dispatch", "submap", "alttab")   # дальше Tab/Shift+Tab/отпускание Alt — в submap
-        if not poke(signal.SIGUSR1):
-            subprocess.Popen([sys.executable, os.path.abspath(__file__), "overlay"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        return
+        hypr("dispatch submap alttab")   # дальше Tab/Shift+Tab/отпускание Alt — в submap
+        st["wins"] = wins
+        if st["hide_id"]:          # панель ещё не успела закрыться с прошлого раза — оставляем её
+            GLib.source_remove(st["hide_id"])
+            st["hide_id"] = 0
+            reveal()
+        build()
+        select(len(wins) - 1 if prev else 1)
+        # свежие снимки: сначала выбранное окно и дальше по списку, текущее — последним
+        order = wins[st["i"]:] + wins[1:st["i"]] + wins[:1] if not prev else wins[::-1]
+        cap.request([w["address"] for w in order])
 
-    st = load()
-    if cmd in ("end", "cancel") or st is None:
-        finish(st, cmd == "end")
-        return
+        def show():
+            st["show_id"] = 0
+            if st["wins"]:
+                win.show()
+            return False
+        if not win.get_visible() and not st["show_id"]:
+            st["show_id"] = GLib.timeout_add(SHOW_DELAY_MS, show)
 
-    st["i"] = (st["i"] + (1 if cmd == "next" else -1)) % len(st["wins"])
-    save(st)
-    poke(signal.SIGUSR1)
+    def handle(cmd):
+        active = st["wins"] is not None
+        if cmd in ("start", "start-prev"):
+            if not active:
+                start(cmd == "start-prev")
+                return
+            cmd = "prev" if cmd == "start-prev" else "next"   # submap не успел/слетел — просто листаем
+        if cmd in ("next", "prev") and active:
+            select((st["i"] + (1 if cmd == "next" else -1)) % len(st["wins"]))
+        elif cmd in ("end", "cancel"):
+            finish(cmd == "end")
+        elif not active:
+            hypr("dispatch submap reset")
+
+    def on_fifo(*_):
+        try:
+            data = os.read(fifo_fd, 4096)
+        except BlockingIOError:
+            return True
+        for line in data.decode("utf-8", "replace").split():
+            try:
+                handle(line)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                st["wins"] = None
+                hypr("dispatch submap reset")
+                hide()
+        return True
+
+    GLib.io_add_watch(fifo_fd, GLib.PRIORITY_HIGH, GLib.IO_IN, on_fifo)
+    GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, lambda *_: os._exit(0))
+    refresh_apps()
+    GLib.timeout_add_seconds(60, refresh_apps)
+    Gtk.main()
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "start"
+    if cmd == "daemon":
+        daemon()
+        return
+    # совместимость со старыми биндами: `hypr-alttab start prev` и т.п.
+    if cmd == "start" and len(sys.argv) > 2 and sys.argv[2] == "prev":
+        cmd = "start-prev"
+    os.execv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "hypr-alttab-ctl"),
+             ["hypr-alttab-ctl", cmd])
 
 
 if __name__ == "__main__":

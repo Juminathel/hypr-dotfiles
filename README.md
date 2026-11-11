@@ -136,7 +136,8 @@ hyprpm enable hyprexpo
 | `hypr-volume` | окно звука: устройство вывода, громкость, микрофон, громкость по программам |
 | `hypr-panel-popup` | старое имя для окон панели, теперь просто зовёт `hypr-popup-show` |
 | `hypr-popup-dismiss` | закрывает всплывающие окна кликом мимо (повешен на каждый клик) |
-| `hypr-alttab` | Alt+Tab с панелью значков (постоянный процесс) |
+| `hypr-alttab` | Alt+Tab: панель с превью окон, выбор мышью (постоянный процесс) |
+| `hypr-alttab-ctl` | крошечный sh-клиент для биндов Alt+Tab: пишет команду в FIFO демона |
 | `hypr-switch`, `hypr-raise-or-run` | список всех окон; запуск из fuzzel «если открыто — перейти» |
 | `hypr-ws`, `hypr-ws-insert`, `hypr-ws-compact` | столы на главном мониторе; вставка стола справа; сдвиг столов без дыр + плашка EN/RU |
 | `hypr-help`, `hypr-help-toggle` | шпаргалка Super+/ |
