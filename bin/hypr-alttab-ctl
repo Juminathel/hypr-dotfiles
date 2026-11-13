@@ -1,7 +1,7 @@
 #!/bin/sh
 # Передаёт команду демону панели Alt+Tab (hypr-alttab daemon) через FIFO.
 # Нарочно на sh: запуск Python на каждое нажатие стоил ~40 мс, это и была «задержка».
-# Команды: start | start-prev | next | prev | end | cancel
+# Команды: start | start-prev | start-ws | start-ws-prev | next | prev | end | cancel
 f="$XDG_RUNTIME_DIR/hypr-alttab.fifo"
 p="$XDG_RUNTIME_DIR/hypr-alttab.pid"
 pid=
