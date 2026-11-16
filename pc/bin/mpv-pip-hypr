@@ -26,13 +26,16 @@ import json, sys
 m = next(m for m in json.load(sys.stdin) if m["focused"])
 print(m["x"] + int(m["width"] / m["scale"]), m["y"] + int(m["height"] / m["scale"]))')
     read -r mx my <<<"$mon"
-    cmds="dispatch setfloating address:$addr"
-    [ "$pinned" = 1 ] || cmds+=" ; dispatch pin address:$addr"
-    cmds+=" ; dispatch resizewindowpixel exact $W $H,address:$addr"
-    cmds+=" ; dispatch movewindowpixel exact $((mx - W - GAP)) $((my - H - GAP)),address:$addr"
+    # Hyprland 0.57+: команды — Lua (hl.dsp.…), пачкой через hyprctl eval
+    w="window = \"address:$addr\""
+    cmds="hl.dispatch(hl.dsp.window.float({action = \"enable\", $w}))"
+    [ "$pinned" = 1 ] || cmds+="; hl.dispatch(hl.dsp.window.pin({action = \"enable\", $w}))"
+    cmds+="; hl.dispatch(hl.dsp.window.resize({x = $W, y = $H, $w}))"
+    cmds+="; hl.dispatch(hl.dsp.window.move({x = $((mx - W - GAP)), y = $((my - H - GAP)), $w}))"
 else
+    w="window = \"address:$addr\""
     cmds=""
-    [ "$pinned" = 1 ] && cmds="dispatch pin address:$addr ; "
-    cmds+="dispatch settiled address:$addr"
+    [ "$pinned" = 1 ] && cmds="hl.dispatch(hl.dsp.window.pin({action = \"disable\", $w})); "
+    cmds+="hl.dispatch(hl.dsp.window.float({action = \"disable\", $w}))"
 fi
-hyprctl --batch "$cmds" >/dev/null
+hyprctl eval "$cmds" >/dev/null

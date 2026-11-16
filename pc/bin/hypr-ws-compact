@@ -21,13 +21,18 @@ ACER = "Acer Technologies RL242Y E"   # главный монитор: стол�
 LAPTOP = "eDP-1"                      # при подключённом Acer — один стол 11
 LAPTOP_WS = 11
 
+import hypr_dsp  # noqa: E402  старые команды dispatch → Lua (Hyprland 0.57+)
+
+
 def hypr(*args):
-    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+    return subprocess.run(["hyprctl", *hypr_dsp.translate(args)], capture_output=True, text=True).stdout
 
 def main_external(mons):
-    """главный внешний монитор: Acer, если подключён, иначе первый внешний (не ноутбук)"""
+    """главный внешний монитор: Acer, если подключён, иначе самый большой внешний (не ноутбук;
+    на ПК с двумя мониторами это основной, а не маленький второй)"""
     return (next((m for m in mons if m["description"].startswith(ACER)), None)
-            or next((m for m in mons if m["name"] != LAPTOP and not m.get("disabled")), None))
+            or max((m for m in mons if m["name"] != LAPTOP and not m.get("disabled")),
+                   key=lambda m: m["width"] * m["height"], default=None))
 
 PAUSE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-ws-compact.pause")
 
@@ -41,11 +46,11 @@ def paused():
 def compact():
     if paused():
         return
-    wins = [w for w in json.loads(hypr("clients", "-j") or "[]")
+    wins = [w for w in hypr_dsp.loads(hypr("clients", "-j") or "[]")
             if w["workspace"]["id"] > 0]
     # пустой стол, который сейчас на экране, тоже считается занятым: его создали нарочно
     # (Super+N). Как только с него уйдут, следующее событие закроет дыру.
-    shown = {m["activeWorkspace"]["id"] for m in json.loads(hypr("monitors", "-j") or "[]")
+    shown = {m["activeWorkspace"]["id"] for m in hypr_dsp.loads(hypr("monitors", "-j") or "[]")
              if m["activeWorkspace"]["id"] > 0}
     remap = {}
     for block in {(i - 1) // BLOCK for i in {w["workspace"]["id"] for w in wins} | shown}:
@@ -61,7 +66,7 @@ def compact():
             for w in sorted(wins, key=lambda w: w["workspace"]["id"])
             if w["workspace"]["id"] in remap]
     # мониторы, на которых виден сдвинутый стол, едут вместе с ним; фокус возвращаем
-    mons = json.loads(hypr("monitors", "-j") or "[]")
+    mons = hypr_dsp.loads(hypr("monitors", "-j") or "[]")
     focused = next((m["name"] for m in mons if m["focused"]), None)
     for m in mons:
         ws = m["activeWorkspace"]["id"]
@@ -78,12 +83,12 @@ def pin_laptop():
     переезжают на Acer. Окна с прочих столов ноутбука (12+, созданных свайпом) — на 11.
     Без Acer ничего не делает: тогда все столы на ноутбуке.
     """
-    mons = json.loads(hypr("monitors", "-j") or "[]")
+    mons = hypr_dsp.loads(hypr("monitors", "-j") or "[]")
     acer = main_external(mons)          # имя «acer» историческое: любой главный внешний
     laptop = next((m for m in mons if m["name"] == LAPTOP), None)
     if not acer or not laptop:
         return
-    wss = json.loads(hypr("workspaces", "-j") or "[]")
+    wss = hypr_dsp.loads(hypr("workspaces", "-j") or "[]")
     on_laptop = {w["id"] for w in wss if w["monitorID"] == laptop["id"] and w["id"] > 0}
     to_acer = {i for i in on_laptop if i <= BLOCK}
     extra = on_laptop - to_acer - {LAPTOP_WS}
@@ -93,7 +98,7 @@ def pin_laptop():
         return
     cmds = [f"dispatch moveworkspacetomonitor {i} {acer['name']}" for i in sorted(to_acer)]
     cmds += [f"dispatch movetoworkspacesilent {LAPTOP_WS},address:{w['address']}"
-             for w in json.loads(hypr("clients", "-j") or "[]")
+             for w in hypr_dsp.loads(hypr("clients", "-j") or "[]")
              if w["workspace"]["id"] in extra]
     if home != laptop["id"]:
         cmds.append(f"dispatch moveworkspacetomonitor {LAPTOP_WS} {LAPTOP}")
@@ -109,13 +114,13 @@ def laptop_main():
     после занятых в 1–10, и ноутбук переходит туда же, если показывал стол 11+.
     Стол 11 после этого пустеет и исчезает (он не persistent), на панели не висит второй «1».
     """
-    mons = json.loads(hypr("monitors", "-j") or "[]")
+    mons = hypr_dsp.loads(hypr("monitors", "-j") or "[]")
     if main_external(mons):
         return
     laptop = next((m for m in mons if m["name"] == LAPTOP), None)
     if not laptop:
         return
-    wins = json.loads(hypr("clients", "-j") or "[]")
+    wins = hypr_dsp.loads(hypr("clients", "-j") or "[]")
     extra = [w for w in wins if w["workspace"]["id"] > BLOCK]
     shown = laptop["activeWorkspace"]["id"]
     if not extra and shown <= BLOCK:
@@ -220,9 +225,9 @@ def wall_pause():
     if not rend:
         wall["slow"] = set()
         return
-    mons = json.loads(hypr("monitors", "-j") or "[]")
+    mons = hypr_dsp.loads(hypr("monitors", "-j") or "[]")
     shown = {m["name"]: m["activeWorkspace"]["id"] for m in mons}
-    wins = [w for w in json.loads(hypr("clients", "-j") or "[]") if w["mapped"] and not w["hidden"]]
+    wins = [w for w in hypr_dsp.loads(hypr("clients", "-j") or "[]") if w["mapped"] and not w["hidden"]]
     busy = {w["workspace"]["id"] for w in wins}
     has_foot = {w["workspace"]["id"] for w in wins if w["class"] in WALL_CLASSES}
     # ноутбук: foot там есть всегда и тайлингом занимает всё свободное место — обои за ним

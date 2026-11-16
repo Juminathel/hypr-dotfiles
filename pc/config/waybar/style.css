@@ -65,6 +65,9 @@ window#waybar.empty #window { background: transparent; padding: 0; }
 #clock       { color: #cdd6f4; font-weight: bold; font-size: 14px; }
 
 #pulseaudio.muted        { color: #6c7086; }
+#pulseaudio.mic          { color: #f5c2e7; }
+#pulseaudio.mic.muted    { color: #f5c2e7; }   /* звук выкл не должен гасить микро */
+#pulseaudio.mic.source-muted { color: #f38ba8; }   /* микро выключен — красный */
 #network.disconnected    { color: #f38ba8; }
 #temperature.critical    { color: #f38ba8; }
 #battery.half            { color: #f9e2af; }   /* 25–50% — жёлтый */

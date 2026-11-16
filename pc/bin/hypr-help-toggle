@@ -11,6 +11,8 @@ import signal
 import subprocess
 import sys
 
+import hypr_dsp  # старые команды dispatch → Lua (Hyprland 0.57+)
+
 APP_ID = "hypr-help"
 CMD = (
     f"foot --app-id={APP_ID} --font='IBM Plex Mono:size=9' "
@@ -36,7 +38,7 @@ def main():
         # окно есть — закрываем его штатно, через сам композитор
         for w in wins:
             subprocess.run(
-                ["hyprctl", "dispatch", "closewindow", f"address:{w['address']}"],
+                ["hyprctl", "dispatch", f'hl.dsp.window.close({{window = "address:{w["address"]}"}})'],
                 capture_output=True,
                 timeout=5,
             )
@@ -55,7 +57,7 @@ def main():
                         pass
         return 0
 
-    subprocess.run(["hyprctl", "dispatch", "exec", CMD], capture_output=True, timeout=5)
+    subprocess.run(["hyprctl", "dispatch", f"hl.dsp.exec_cmd({hypr_dsp.q(CMD)})"], capture_output=True, timeout=5)
     return 0
 
 

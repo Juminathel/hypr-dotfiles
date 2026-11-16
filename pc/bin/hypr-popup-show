@@ -15,4 +15,4 @@ case $kind in
     wifi)     s=hypr-wifi ;;
     *) echo "неизвестное окно: $kind" >&2; exit 1 ;;
 esac
-exec hyprctl dispatch exec "$HOME/.local/bin/$s --daemon --show"
+exec hyprctl dispatch "hl.dsp.exec_cmd(\"$HOME/.local/bin/$s --daemon --show\")"   # Lua: Hyprland 0.57+

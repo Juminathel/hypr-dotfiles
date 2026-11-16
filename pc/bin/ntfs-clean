@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Снять с NTFS-диска «грязный» флаг и подключить его.
+#   ntfs-clean /mnt/hdd1      (папка из /etc/fstab; sudo спросится сам)
+#   ntfs-clean                (все NTFS-диски из /etc/fstab, которые не подключились)
+#
+# Флаг ставит Windows, когда диск не закрыт как следует: «Быстрый запуск» Windows,
+# выключение кнопкой, сбой. Пока он стоит, Linux подключает диск только для чтения
+# или не подключает. ntfsfix -d снимает флаг, но не проверяет диск, как chkdsk:
+# если диск часто «грязный» — отключи в Windows «Быстрый запуск» и раз в
+# какое-то время делай там chkdsk X: /f.
+set -u
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+command -v ntfsfix >/dev/null || { echo "нет ntfsfix: sudo pacman -S ntfsprogs" >&2; exit 1; }
+
+targets=("$@")
+if [ ${#targets[@]} = 0 ]; then
+    mapfile -t targets < <(awk '$3 ~ /^ntfs/ {print $2}' /etc/fstab)
+fi
+
+rc=0
+for dir in "${targets[@]}"; do
+    if findmnt -n "$dir" >/dev/null && ! findmnt -n -O ro "$dir" >/dev/null; then
+        echo "уже подключён: $dir"; continue
+    fi
+    dev=$(findmnt -n -s -o SOURCE "$dir") || { echo "нет в fstab: $dir" >&2; rc=1; continue; }
+    dev=$(findfs "$dev" 2>/dev/null || echo "$dev")
+    umount "$dir" 2>/dev/null
+    echo "== $dir ($dev)"
+    if ntfsfix -d "$dev" && mount "$dir"; then
+        echo "OK   $dir"
+    else
+        echo "ОШИБКА $dir — диск занят спящей Windows? Загрузи Windows и выключи её полностью" >&2
+        rc=1
+    fi
+done
+exit $rc

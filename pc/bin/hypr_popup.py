@@ -42,8 +42,11 @@ OTHER_POPUPS = {"hypr-search", "hypr-cliphist", "hypr-volume", "hypr-wifi", "hyp
                 "btop-popup", "nm-connection-editor", "wifi-popup"}
 
 
+import hypr_dsp  # noqa: E402  старые команды dispatch → Lua (Hyprland 0.57+)
+
+
 def hypr(*args):
-    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+    return subprocess.run(["hyprctl", *hypr_dsp.translate(args)], capture_output=True, text=True).stdout
 
 
 def pidfile(kind):
@@ -95,7 +98,7 @@ class Resident:
 
     def _find_addr(self):
         try:
-            clients = json.loads(hypr("clients", "-j") or "[]")
+            clients = hypr_dsp.loads(hypr("clients", "-j") or "[]")
         except json.JSONDecodeError:
             return True
         me = next((c for c in clients if c["pid"] == os.getpid()), None)
@@ -167,7 +170,7 @@ class Resident:
         if self.on_show:
             self.on_show()
         try:
-            mons = json.loads(hypr("monitors", "-j") or "[]")
+            mons = hypr_dsp.loads(hypr("monitors", "-j") or "[]")
             cx, cy = (float(v) for v in hypr("cursorpos").split(","))
         except (json.JSONDecodeError, ValueError):
             return
@@ -200,7 +203,7 @@ class Resident:
                 f.write(f"{self.kind} {int(cx)}\n")
         # остальные всплывающие — убрать (свои спрячутся, чужие закроются)
         try:
-            others = [c for c in json.loads(hypr("clients", "-j") or "[]")
+            others = [c for c in hypr_dsp.loads(hypr("clients", "-j") or "[]")
                       if c["class"] in OTHER_POPUPS and c["class"] != self.app_id
                       and c["workspace"]["id"] > 0]
         except json.JSONDecodeError:

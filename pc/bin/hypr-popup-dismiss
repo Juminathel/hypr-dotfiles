@@ -37,15 +37,18 @@ POPUPS = {
     "kcm_networkmanagement", # ПКМ по значку сети — настройки KDE
     "hypr-search",           # быстрый поиск Alt+Space
 }
-PANEL = "waybar"
+PANEL = {"waybar", "qs-bar"}   # namespace слоя панели: waybar или Quickshell
 STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-panel-popup")
 WIFI_FUZZEL = "^fuzzel --dmenu .*--prompt Wi-Fi"
 SEARCH_H = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-search-h")
 ICON_HALF = 22               # клик в пределах ±22 px от открывшего значка — это сам значок
 
 
+import hypr_dsp  # noqa: E402  старые команды dispatch → Lua (Hyprland 0.57+)
+
+
 def hypr(*args):
-    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+    return subprocess.run(["hyprctl", *hypr_dsp.translate(args)], capture_output=True, text=True).stdout
 
 
 def inside(px, py, x, y, w, h):
@@ -77,7 +80,7 @@ def opener_x():
 
 
 def main():
-    popups = [c for c in json.loads(hypr("clients", "-j") or "[]")
+    popups = [c for c in hypr_dsp.loads(hypr("clients", "-j") or "[]")
               if c["class"] in POPUPS and c["mapped"] and not c["hidden"]
               and c["workspace"]["id"] > 0]   # спрятанные на скрытом столе (hypr_popup.py) не в счёт
     wifi = wifi_menu_open()
@@ -86,14 +89,14 @@ def main():
     px, py = (float(v) for v in hypr("cursorpos").split(","))
 
     on_panel = False
-    for mon in json.loads(hypr("layers", "-j") or "{}").values():
+    for mon in hypr_dsp.loads(hypr("layers", "-j") or "{}").values():
         for layers in mon["levels"].values():
             for l in layers:
                 if not inside(px, py, l["x"], l["y"], l["w"], l["h"]):
                     continue
                 if l["namespace"] == "launcher":
                     return                    # клик внутри меню fuzzel
-                if l["namespace"] == PANEL:
+                if l["namespace"] in PANEL:
                     on_panel = True
 
     if on_panel:

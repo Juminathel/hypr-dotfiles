@@ -49,8 +49,13 @@ MOUSE_ARM_PX = 12
 THUMB_W, THUMB_H = 200, 125
 
 
+import hypr_dsp  # noqa: E402  старые команды dispatch → Lua (Hyprland 0.57+)
+
+
 def hypr(req):
     """Запрос в сокет Hyprland напрямую (~1 мс вместо ~10 мс на запуск hyprctl)."""
+    if req.startswith("dispatch "):          # Hyprland 0.57+: dispatch принимает только Lua
+        req = "dispatch " + hypr_dsp.dsp(req[len("dispatch "):])
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(1)
@@ -68,7 +73,8 @@ def hypr(req):
 
 
 def batch(*cmds):
-    return hypr("[[BATCH]]" + " ; ".join(cmds))
+    # Hyprland 0.57+: несколько dispatch — одним Lua-выражением через eval
+    return hypr("eval " + "; ".join(f"hl.dispatch({hypr_dsp.dsp(c[len('dispatch '):])})" for c in cmds))
 
 
 class WinCapture:
@@ -562,7 +568,7 @@ def daemon():
         elif wins:
             # отмена: если фокус успел уйти на саму панель (мышь) — вернуть его исходному окну
             try:
-                active = json.loads(hypr("j/activewindow") or "{}")
+                active = hypr_dsp.loads(hypr("j/activewindow") or "{}")
             except ValueError:
                 active = {}
             if (active.get("class") or "").lower() == APP_ID:
@@ -574,8 +580,8 @@ def daemon():
         """Окна (уже по недавности) → занятые столы по недавности. Возвращает (плитки, с какой
         начинать): текущий стол идёт первым, если на нём есть окна."""
         try:
-            mons = {m["id"]: m for m in json.loads(hypr("j/monitors") or "[]")}
-            cur_ws = json.loads(hypr("j/activeworkspace") or "{}").get("id")
+            mons = {m["id"]: m for m in hypr_dsp.loads(hypr("j/monitors") or "[]")}
+            cur_ws = hypr_dsp.loads(hypr("j/activeworkspace") or "{}").get("id")
         except ValueError:
             mons, cur_ws = {}, None
         by_ws = {}
@@ -605,7 +611,7 @@ def daemon():
 
     def start(prev, by_ws=False):
         try:
-            clients = json.loads(hypr("j/clients") or "[]")
+            clients = hypr_dsp.loads(hypr("j/clients") or "[]")
         except ValueError:
             clients = []
         alive = {c["address"] for c in clients}

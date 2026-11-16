@@ -51,23 +51,26 @@ place() {
 }
 
 say "Настройки → ~/.config"
-for d in hypr waybar mako fuzzel foot mpv btop; do
+for d in hypr waybar quickshell mako fuzzel foot mpv btop; do
     [ -e "$here/config/$d" ] || continue
     place "$here/config/$d" "$HOME/.config/$d"
 done
 place "$here/config/gtk-3.0/settings.ini" "$HOME/.config/gtk-3.0/settings.ini"
 place "$here/config/gtk-4.0/settings.ini" "$HOME/.config/gtk-4.0/settings.ini"
 
-# настройки конкретного компьютера: из старого ~/.config/hypr, если он был, иначе шаблон ПК
-old_machine="$HOME/.config/hypr.bak-$stamp/machine.conf"
-if [ -f "$old_machine" ]; then
-    cp "$old_machine" "$HOME/.config/hypr/machine.conf"
-    say "machine.conf взят из прежнего ~/.config/hypr"
-else
-    cp "$here/config/hypr/machines/desktop.conf" "$HOME/.config/hypr/machine.conf"
-    say "machine.conf — шаблон домашнего ПК (мониторы и видеокарту проверь, см. README)"
-fi
-touch "$HOME/.config/hypr/local.conf"   # личные мелочи, его source стоит в конце hyprland.conf
+# настройки конкретного компьютера: из старого ~/.config/hypr, если они были, иначе шаблон ПК.
+# Hyprland 0.57+ читает hyprland.lua → machine.lua; .conf — для старых версий.
+for ext in lua conf; do
+    old_machine="$HOME/.config/hypr.bak-$stamp/machine.$ext"
+    if [ -f "$old_machine" ]; then
+        cp "$old_machine" "$HOME/.config/hypr/machine.$ext"
+        say "machine.$ext взят из прежнего ~/.config/hypr"
+    else
+        cp "$here/config/hypr/machines/desktop.$ext" "$HOME/.config/hypr/machine.$ext"
+        say "machine.$ext — шаблон домашнего ПК (мониторы и видеокарту проверь, см. README)"
+    fi
+done
+touch "$HOME/.config/hypr/local.conf"   # личные мелочи (для hyprland.conf; у hyprland.lua — local.lua)
 
 # пути с ноутбука (/home/alih) → своя домашняя папка
 grep -rl '/home/alih' "$HOME/.config/hypr" "$HOME/.config/mpv" 2>/dev/null \

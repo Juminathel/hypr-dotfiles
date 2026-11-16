@@ -57,8 +57,11 @@ image, image:backdrop { opacity: 1; -gtk-icon-effect: none; }
 """
 
 
+import hypr_dsp  # noqa: E402  старые команды dispatch → Lua (Hyprland 0.57+)
+
+
 def hypr(*args):
-    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+    return subprocess.run(["hyprctl", *hypr_dsp.translate(args)], capture_output=True, text=True).stdout
 
 
 def toggle_off():

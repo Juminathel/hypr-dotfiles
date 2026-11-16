@@ -12,12 +12,16 @@
   "margin-left": 8,
   "margin-right": 8,
 
-  "modules-left":   ["hyprland/workspaces", "hyprland/submap"],
+  "modules-left":   ["ext/workspaces", "hyprland/submap"],
   "modules-center": ["hyprland/window"],
-  "modules-right":  ["hyprland/language", "pulseaudio", "backlight", "network",
+  "modules-right":  ["hyprland/language", "pulseaudio", "pulseaudio#mic", "network",
                      "memory", "temperature", "battery", "tray", "clock"],
 
-  "hyprland/workspaces": {
+  // Hyprland 0.57 + Waybar 0.15: hyprland/workspaces переключает столы старой командой
+  // `dispatch workspace N`, которую 0.57 отклоняет (клик не работает). ext/workspaces
+  // переключает через протокол Wayland ext-workspace — работает. Ноутбуку (Hyprland 0.53)
+  // это не нужно: там можно оставить hyprland/workspaces.
+  "ext/workspaces": {
     // Показываем номер воркспейса. Воркспейсы 1-5 видны всегда, даже пустые,
     // чтобы было понятно, куда можно перейти; 6-10 появляются по мере создания.
     // Acer — главный, на нём столы 1–10 (1–5 всегда видны — правилами workspace в hyprland.conf).
@@ -26,7 +30,7 @@
     "format-icons": { "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "9", "10": "10", "11": "1", "12": "2", "13": "3", "14": "4", "15": "5", "16": "6", "17": "7", "18": "8", "19": "9", "20": "10" },
     "all-outputs": false,
     "on-click": "activate",
-    "persistent-workspaces": {}   // стол 11 держит hypr-ws-compact (pin_laptop), без Acer его нет
+    "sort-by-id": true
   },
 
   "hyprland/window": { "format": "{title}", "max-length": 60, "separate-outputs": true },
@@ -46,6 +50,22 @@
     "scroll-step": 5
   },
 
+  // Микрофон: тот же модуль, но показывает источник (default source).
+  // Колесо — громкость микро, ЛКМ — выкл/вкл, ПКМ — pavucontrol на вкладке «Устройства ввода».
+  "pulseaudio#mic": {
+    "format": "{format_source}",
+    "format-muted": "{format_source}",
+    "format-bluetooth": "{format_source}",
+    "format-bluetooth-muted": "{format_source}",
+    "format-source": "󰍬 {volume}%",
+    "format-source-muted": "󰍭",
+    "on-click": "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle",
+    "on-click-right": "pavucontrol -t 4",
+    "on-scroll-up": "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 5%+",
+    "on-scroll-down": "wpctl set-volume @DEFAULT_AUDIO_SOURCE@ 5%-",
+    "tooltip-format": "Микрофон: {source_desc}"
+  },
+
   "backlight": {
     "device": "amdgpu_bl2",
     "format": "☀ {percent}%",
@@ -55,11 +75,12 @@
 
   "network": {
     // Только значок; имя сети, сигнал и IP — во всплывающей подсказке
-    "interface": "wlp4s0",
+    // без "interface": Waybar сам берёт подключение, через которое идёт интернет (кабель или Wi-Fi)
     "format-wifi": "󰖩",
     "format-ethernet": "󰈀",
     "format-disconnected": "󰖪",
     "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
+    "tooltip-format-ethernet": "Кабель {ifname}\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
     "on-click": "$HOME/.local/bin/hypr-popup-show wifi",   // окно сетей под значком; ПКМ — настройки KDE
     "on-click-right": "kcmshell6 kcm_networkmanagement",
     "interval": 5
@@ -69,7 +90,10 @@
   "memory": { "format": "󰍛 {used:0.1f}G", "interval": 5, "tooltip-format": "{used:0.1f}G / {total:0.1f}G ({percentage}%)", "on-click": "foot --app-id=btop-popup -e btop" },
 
   "temperature": {
-    "thermal-zone": 0,
+    // thermal_zone0 здесь — это Wi-Fi (iwlwifi), отсюда был 0°C.
+    // Берём датчик CPU k10temp (Tctl) по стабильному пути: номер hwmonN может меняться.
+    "hwmon-path-abs": "/sys/devices/pci0000:00/0000:00:18.3/hwmon",
+    "input-filename": "temp1_input",
     "critical-threshold": 85,
     "format": "{temperatureC}°C",
     "interval": 5

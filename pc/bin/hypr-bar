@@ -1,0 +1,15 @@
+#!/bin/sh
+# Запускает панель: Quickshell (~/.config/quickshell), если он установлен, иначе waybar.
+# Выбрать руками:  echo waybar > ~/.config/hypr/bar   (или quickshell; удалить файл — снова авто)
+# Запуск — из hyprland.conf через hypr-respawn, поэтому здесь exec: упадёт — поднимут заново.
+choice=$(cat "$HOME/.config/hypr/bar" 2>/dev/null)
+if [ -z "$choice" ]; then
+    if command -v quickshell >/dev/null; then choice=quickshell; else choice=waybar; fi
+fi
+case $choice in
+    waybar)
+        # waybar рисует трей темой значков GTK: отдельный GTK-конфиг с breeze-dark (см. hyprland.conf)
+        exec env XDG_CONFIG_HOME="$HOME/.config/hypr/gtk" GSETTINGS_BACKEND=keyfile waybar ;;
+    *)
+        exec quickshell ;;
+esac

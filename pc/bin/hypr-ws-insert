@@ -21,8 +21,11 @@ FIRST, LAST = 1, 10
 PAUSE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-ws-compact.pause")
 
 
+import hypr_dsp  # noqa: E402  старые команды dispatch → Lua (Hyprland 0.57+)
+
+
 def hypr(*args):
-    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+    return subprocess.run(["hyprctl", *hypr_dsp.translate(args)], capture_output=True, text=True).stdout
 
 
 def notify(msg):
@@ -31,10 +34,11 @@ def notify(msg):
 
 def main():
     action = sys.argv[1] if len(sys.argv) > 1 else "go"
-    mons = json.loads(hypr("monitors", "-j") or "[]")
+    mons = hypr_dsp.loads(hypr("monitors", "-j") or "[]")
     focused = next((m for m in mons if m["focused"]), None)
     main_mon = (next((m for m in mons if m["description"].startswith(ACER)), None)
-                or next((m for m in mons if m["name"] != "eDP-1"), None)   # любой внешний
+                or max((m for m in mons if m["name"] != "eDP-1"),          # самый большой внешний
+                       key=lambda m: m["width"] * m["height"], default=None)
                 or next((m for m in mons if m["name"] == "eDP-1"), None)
                 or focused)   # другой компьютер — главный тот, где фокус
     if not main_mon:
@@ -47,7 +51,7 @@ def main():
         notify(f"Справа от {cur} места нет: столы только {FIRST}–{LAST}")
         return
 
-    wins = [c for c in json.loads(hypr("clients", "-j") or "[]")
+    wins = [c for c in hypr_dsp.loads(hypr("clients", "-j") or "[]")
             if FIRST <= c["workspace"]["id"] <= LAST]
     by_ws = {}
     for c in wins:
@@ -63,7 +67,7 @@ def main():
         for ws in reversed(right):
             cmds += [f"dispatch movetoworkspacesilent {ws + 1},address:{a}" for a in by_ws[ws]]
 
-    active = json.loads(hypr("activewindow", "-j") or "{}")
+    active = hypr_dsp.loads(hypr("activewindow", "-j") or "{}")
     if focused and focused["name"] != main_mon["name"]:
         cmds.insert(0, f"dispatch focusmonitor {main_mon['name']}")
     if action == "move" and active.get("address"):

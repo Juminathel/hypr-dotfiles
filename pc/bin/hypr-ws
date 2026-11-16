@@ -12,13 +12,15 @@ main=$(hyprctl -j monitors | python3 -c '
 import json, sys
 mons = json.load(sys.stdin)
 acer = [m["name"] for m in mons if m["description"].startswith("Acer Technologies RL242Y E")]
-acer += [m["name"] for m in mons if m["name"] != "eDP-1" and not m["disabled"]]   # любой внешний
+acer += [m["name"] for m in sorted(mons, key=lambda m: -m["width"] * m["height"])   # самый большой внешний
+         if m["name"] != "eDP-1" and not m["disabled"]]
 laptop = [m["name"] for m in mons if m["name"] == "eDP-1"]
 # другой компьютер (нет ни Acer, ни ноутбука) — главный тот, где фокус
 other = [m["name"] for m in mons if m["focused"]] or [m["name"] for m in mons]
 print((acer or laptop or other)[0])')
 
 case $action in
-    go)   hyprctl --batch "dispatch focusmonitor $main ; dispatch workspace $n" ;;
-    move) hyprctl dispatch movetoworkspace "$n" ;;
+    # Hyprland 0.57+: dispatch принимает Lua (hl.dsp.…), а не старое «workspace N»
+    go)   hyprctl eval "hl.dispatch(hl.dsp.focus({monitor = \"$main\"})); hl.dispatch(hl.dsp.focus({workspace = \"$n\"}))" ;;
+    move) hyprctl dispatch "hl.dsp.window.move({workspace = \"$n\"})" ;;
 esac >/dev/null
