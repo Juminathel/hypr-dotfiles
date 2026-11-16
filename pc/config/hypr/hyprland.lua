@@ -19,6 +19,18 @@ end
 
 local exec = hl.dsp.exec_cmd
 
+-- какая панель запустится — решает так же, как ~/.local/bin/hypr-bar:
+-- ~/.config/hypr/bar (waybar | quickshell), иначе quickshell, если установлен
+local function bar_choice()
+    local f = io.open(CFG .. "/bar", "r")
+    if f then
+        local c = (f:read("l") or ""):gsub("%s+", "")
+        f:close()
+        if c ~= "" then return c end
+    end
+    return file_exists("/usr/bin/quickshell") and "quickshell" or "waybar"
+end
+
 ----------------
 --- МОНИТОРЫ ---
 ----------------
@@ -98,8 +110,11 @@ hl.on("hyprland.start", function()
     -- Всплывающие окна держатся запущенными, чтобы открываться без задержки (hypr_popup.py)
     hl.exec_cmd(BIN .. "hypr-respawn " .. BIN .. "hypr-search --daemon")
     hl.exec_cmd(BIN .. "hypr-respawn " .. BIN .. "hypr-cliphist-pick --daemon")
-    hl.exec_cmd(BIN .. "hypr-respawn " .. BIN .. "hypr-volume --daemon")
-    hl.exec_cmd(BIN .. "hypr-respawn " .. BIN .. "hypr-wifi --daemon")
+    -- окна громкости и Wi-Fi нужны только waybar: у Quickshell они свои (Volume/WifiPopup.qml)
+    if bar_choice() == "waybar" then
+        hl.exec_cmd(BIN .. "hypr-respawn " .. BIN .. "hypr-volume --daemon")
+        hl.exec_cmd(BIN .. "hypr-respawn " .. BIN .. "hypr-wifi --daemon")
+    end
     -- История буфера обмена (Super+V)
     hl.exec_cmd("wl-paste --type text --watch cliphist store")
     hl.exec_cmd("wl-paste --type image --watch cliphist store")

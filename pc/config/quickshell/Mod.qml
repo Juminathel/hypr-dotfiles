@@ -12,6 +12,7 @@ MouseArea {
     property int fontSize: Theme.fontSize
     property string fontFamily: Theme.font
     property bool bold: false
+    property bool tipOff: false        // не показывать подсказку (открыто окно этого значка)
     property int pad: 9
     property alias label: label
 
@@ -46,7 +47,7 @@ MouseArea {
 
     Tip {
         target: mod
-        hovered: mod.containsMouse
+        hovered: mod.containsMouse && !mod.tipOff
         text: mod.tip
         content: mod.tipContent
     }

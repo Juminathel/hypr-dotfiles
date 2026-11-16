@@ -8,6 +8,7 @@ import Quickshell.Hyprland
 Row {
     id: root
     required property var monitor   // HyprlandMonitor
+    signal activated()               // щёлкнули по столу — панель закроет свои окна
     spacing: 2
 
     readonly property var list: Hyprland.workspaces.values
@@ -30,7 +31,7 @@ Row {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             // ws.activate() шлёт старое `dispatch workspace N`, а Hyprland 0.57+ ждёт Lua
-            onClicked: Hyprland.dispatch(`hl.dsp.focus({workspace = "${ws.id}"})`)
+            onClicked: { root.activated(); Hyprland.dispatch(`hl.dsp.focus({workspace = "${ws.id}"})`) }
 
             Rectangle {
                 anchors.fill: parent

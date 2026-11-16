@@ -24,6 +24,16 @@ PanelWindow {
 
     function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]) }
 
+    // выпадающие окна: открыто не больше одного; повторный щелчок по значку — закрыть
+    function toggle(p) {
+        const was = p.open
+        console.info("popup: щелчок по значку,", was ? "закрываю" : "открываю")
+        for (const q of [volPop, wifiPop]) q.open = false
+        p.open = !was
+    }
+    VolumePopup { id: volPop; opener: volMod; bar: bar }
+    WifiPopup { id: wifiPop; opener: netMod; bar: bar }
+
     // общий вид трёх блоков
     component Block: Rectangle {
         default property alias items: row.data
@@ -39,7 +49,7 @@ PanelWindow {
     Block {
         id: leftBlock
         anchors.left: parent.left
-        Workspaces { monitor: bar.monitor }
+        Workspaces { monitor: bar.monitor; onActivated: { volPop.open = false; wifiPop.open = false } }
         Mod {
             visible: Sys.submap !== ""
             text: Sys.submap
@@ -90,15 +100,17 @@ PanelWindow {
             onLeftClick: bar.run("hyprctl switchxkblayout current next")
         }
 
-        // звук: ЛКМ — микшер под значком, ПКМ — без звука, колесо — ±5%
+        // звук: ЛКМ — окно громкости под значком, ПКМ — без звука, колесо — ±5%
         Mod {
+            id: volMod
+            tipOff: volPop.open
             visible: bar.sink !== null
             readonly property bool bt: (bar.sink?.name ?? "").startsWith("bluez")
             text: bar.muted ? "󰝟"
                 : (bt ? "󰂰" : ["󰕿", "󰖀", "󰕾"][Math.min(2, Math.floor(bar.vol / (100 / 3)))]) + " " + bar.vol + "%"
             color: bar.muted ? Theme.overlay : Theme.sky
             tip: bar.sink?.description ?? ""
-            onLeftClick: bar.run("$HOME/.local/bin/hypr-popup-show volume")
+            onLeftClick: bar.toggle(volPop)
             onRightClick: if (bar.sink) bar.sink.audio.muted = !bar.sink.audio.muted
             onWheel: wheel => {
                 if (!bar.sink) return
@@ -138,6 +150,8 @@ PanelWindow {
 
         // сеть: только значок, подробности в подсказке. ЛКМ — окно сетей, ПКМ — настройки KDE
         Mod {
+            id: netMod
+            tipOff: wifiPop.open
             text: Sys.netType === "wifi" ? "󰖩" : Sys.netType === "ethernet" ? "󰈀" : "󰖪"
             color: Sys.netType === "" ? Theme.red : Theme.green
             fontFamily: Theme.iconFont
@@ -145,7 +159,7 @@ PanelWindow {
             tip: Sys.netType === "" ? "Нет сети"
                : (Sys.netType === "wifi" ? Sys.netName + " (" + Sys.netSignal + "%)" : "Кабель " + Sys.netDev)
                  + "\n" + Sys.netIp + (Sys.netDown ? "\n↓" + Sys.netDown + " ↑" + Sys.netUp : "")
-            onLeftClick: bar.run("$HOME/.local/bin/hypr-popup-show wifi")
+            onLeftClick: bar.toggle(wifiPop)
             onRightClick: bar.run("kcmshell6 kcm_networkmanagement")
         }
 
