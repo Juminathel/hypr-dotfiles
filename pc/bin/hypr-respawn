@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Держит программу запущенной, пока жив ЭТОТ сеанс Hyprland: упала — перезапуск через 2 с.
+# После выхода из Hyprland (в т.ч. при переходе в KDE) цикл завершается сам, а не крутит
+# waybar/обои дальше. Сеанс проверяется через hyprctl по HYPRLAND_INSTANCE_SIGNATURE.
+# Использование в hyprland.conf: exec-once = hypr-respawn <команда> [аргументы]
+set -u
+
+alive() { hyprctl -j version >/dev/null 2>&1; }
+
+while alive; do
+    "$@"
+    sleep 2
+done

@@ -1,0 +1,506 @@
+#!/usr/bin/env python3
+"""Быстрый поиск в духе KRunner/Spotlight для Hyprland (KRunner сам здесь окно не показывает —
+ему нужны KWin и plasmashell).
+
+  hypr-search           — показать/спрятать (то же, что hypr-popup-show search)
+  hypr-search --daemon  — постоянный процесс с готовым окном (exec-once через hypr-respawn);
+                          показ и прятанье — hypr_popup.py
+
+Что ищет, по порядку в выдаче:
+  калькулятор  — «2+2*3», «15%*2000», «2^10» → Enter копирует ответ
+  окна         — открытые окна по заголовку и классу → Enter переключает на окно
+  программы    — .desktop-файлы (название, описание, ключевые слова, команда)
+  файлы/папки  — индекс KDE Baloo (baloosearch6), тот же, что у поиска Dolphin,
+                 плюс по имени в EXTRA_DIRS (файлы из Telegram)
+  интернет     — последней строкой: искать в Google
+
+Стрелки — выбор, Enter — открыть, Esc — закрыть. Клик мимо окна закрывает его (hypr-popup-dismiss).
+"""
+import ast
+import json
+import operator
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import urllib.parse
+
+APP_ID = "hypr-search"
+WIDTH = 680
+
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+if "--daemon" not in sys.argv:
+    os.execv(os.path.expanduser("~/.local/bin/hypr-popup-show"), ["hypr-popup-show", "search"])
+
+
+# ---------- окно ----------
+
+import gi  # noqa: E402
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+
+CSS = """
+* { font-family: "IBM Plex Mono", "JetBrainsMono Nerd Font"; font-size: 11pt; color: #cdd6f4;
+    outline: none; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }
+window, window:backdrop { background-color: transparent; background-image: none; }
+.panel, .panel:backdrop { background-color: rgba(30, 30, 46, 0.96); border: 2px solid #89b4fa;
+    border-radius: 14px; }
+entry, entry:backdrop, entry:focus { background-color: #313244; background-image: none;
+    border: 1px solid #45475a; border-radius: 10px; padding: 8px 12px; font-size: 14pt;
+    caret-color: #89b4fa; min-height: 0; }
+entry:focus { border-color: #89b4fa; }
+entry image { color: #7f849c; }
+list, list:backdrop { background-color: transparent; }
+row, row:backdrop { background-color: transparent; border-radius: 8px; padding: 5px 8px; }
+row:selected, row:selected:backdrop { background-color: rgba(137, 180, 250, 0.18); }
+row:hover { background-color: rgba(69, 71, 90, 0.5); }
+row:selected:hover { background-color: rgba(137, 180, 250, 0.24); }
+.title, .title:backdrop { font-size: 11pt; }
+.sub, .sub:backdrop { color: #7f849c; font-size: 9pt; }
+.kind, .kind:backdrop { color: #6c7086; font-size: 9pt; }
+.calc, .calc:backdrop { color: #a6e3a1; font-size: 13pt; font-weight: bold; }
+.hint, .hint:backdrop { color: #6c7086; font-size: 9pt; padding: 2px 4px; }
+"""
+
+LIMITS = {"window": 3, "app": 5, "file": 5}
+HEIGHT = 700                 # окно постоянного размера: при наборе ничего не прыгает
+STATE_H = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-search-h")
+HOME = os.path.expanduser("~")
+
+# Папки, которых нет в индексе Baloo (он пропускает скрытые, а ~/.var скрытая): тут ищем по имени
+# через fdfind. Telegram из flatpak кладёт сюда всё, что открывали из чатов.
+EXTRA_DIRS = [
+    os.path.join(HOME, ".var/app/org.telegram.desktop/data/TelegramDesktop/tdata/temp_data"),
+]
+
+
+# ---------- калькулятор ----------
+
+OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+       ast.Div: operator.truediv, ast.Pow: operator.pow, ast.Mod: operator.mod,
+       ast.FloorDiv: operator.floordiv, ast.USub: operator.neg, ast.UAdd: operator.pos}
+CALC_RE = re.compile(r"^[\d\s.,+\-*/()^%]+$")
+
+
+def _ev(n):
+    if isinstance(n, ast.Expression):
+        return _ev(n.body)
+    if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+        return n.value
+    if isinstance(n, ast.BinOp) and type(n.op) in OPS:
+        a, b = _ev(n.left), _ev(n.right)
+        if isinstance(n.op, ast.Pow) and abs(b) > 1000:
+            raise ValueError("слишком большая степень")
+        return OPS[type(n.op)](a, b)
+    if isinstance(n, ast.UnaryOp) and type(n.op) in OPS:
+        return OPS[type(n.op)](_ev(n.operand))
+    raise ValueError("не выражение")
+
+
+def calc(q):
+    s = q.strip().lstrip("=")
+    if not CALC_RE.match(s) or not re.search(r"\d", s) or not re.search(r"[+\-*/^%]", s.strip("-")):
+        return None
+    s = s.replace(",", ".").replace("^", "**")
+    s = re.sub(r"(\d+(?:\.\d+)?)%", r"(\1/100)", s)          # 15% → 0.15
+    try:
+        v = _ev(ast.parse(s, mode="eval"))
+    except Exception:
+        return None
+    if isinstance(v, float):
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        if v.is_integer() and abs(v) < 1e15:
+            v = int(v)
+        else:
+            return f"{v:.10g}"
+    return f"{v:,}".replace(",", " ")
+
+
+# ---------- источники ----------
+
+def load_apps():
+    apps = []
+    for a in Gio.AppInfo.get_all():
+        if not a.should_show():
+            continue
+        kw = []
+        if isinstance(a, Gio.DesktopAppInfo):
+            kw = a.get_keywords() or []
+            gen = a.get_generic_name() or ""
+        else:
+            gen = ""
+        name = a.get_display_name() or a.get_name() or ""
+        apps.append({
+            "info": a, "name": name, "low": name.lower(),
+            "extra": " ".join([gen, a.get_description() or "", " ".join(kw),
+                               os.path.basename((a.get_executable() or ""))]).lower(),
+            "sub": gen or (a.get_description() or ""),
+        })
+    return apps
+
+
+def score(text, extra, q):
+    if text.startswith(q):
+        return 100 - min(len(text), 50) / 100
+    if any(w.startswith(q) for w in re.split(r"[\s\-_.:]+", text)):
+        return 80
+    if q in text:
+        return 60
+    if q in extra:
+        return 40
+    it = iter(text)                                      # буквы по порядку: «ffx» → firefox
+    if len(q) >= 3 and text[:1] == q[:1] and all(ch in it for ch in q):
+        return 20
+    return 0
+
+
+def load_windows():
+    try:
+        clients = json.loads(hypr("clients", "-j") or "[]")
+    except json.JSONDecodeError:
+        return []
+    return [c for c in clients
+            if c["class"] != APP_ID and c["mapped"] and (c["title"] or c["class"])]
+
+
+def baloo(q, limit):
+    try:
+        out = subprocess.run(["baloosearch6", "-l", str(limit * 3), q],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    paths = [l for l in out.splitlines() if l.startswith("/") and os.path.exists(l)]
+    dirs = [d for d in EXTRA_DIRS if os.path.isdir(d)]
+    if dirs:
+        try:
+            fd = shutil.which("fdfind") or shutil.which("fd")   # Ubuntu: fdfind, Arch: fd
+            if not fd:
+                raise OSError("fd не установлен")
+            out = subprocess.run([fd, "-i", "-F", "--max-results", str(limit), q, *dirs],
+                                 capture_output=True, text=True, timeout=2).stdout
+            paths += [l.rstrip("/") for l in out.splitlines() if l.startswith("/")]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    paths = list(dict.fromkeys(paths))
+    ql = q.lower()
+    # совпадение в имени файла — выше совпадения только в содержимом/пути
+    paths.sort(key=lambda p: (ql not in os.path.basename(p).lower(),
+                              "/." in p, len(p)))
+    return paths[:limit]
+
+
+def short(p):
+    if p.startswith(EXTRA_DIRS[0]):
+        return "Telegram" + p[len(EXTRA_DIRS[0]):]
+    return "~" + p[len(HOME):] if p.startswith(HOME) else p
+
+
+def file_icon(path):
+    if os.path.isdir(path):
+        return Gio.ThemedIcon.new("folder")
+    ctype, _ = Gio.content_type_guess(path, None)
+    return Gio.content_type_get_icon(ctype)
+
+
+# ---------- действия ----------
+
+def run_detached(cmd):
+    """запуск через Hyprland: процесс не будет нашим потомком и переживёт закрытие окна"""
+    hypr("dispatch", "exec", cmd)
+
+
+def act_app(info):
+    if isinstance(info, Gio.DesktopAppInfo) and info.get_filename():
+        run_detached("gio launch " + shlex.quote(info.get_filename()))
+    else:
+        info.launch([], None)
+
+
+def act_open(path):
+    run_detached("xdg-open " + shlex.quote(path))
+
+
+def act_window(addr):
+    hypr("dispatch", "focuswindow", f"address:{addr}")
+
+
+def act_copy(text):
+    subprocess.run(["wl-copy", text.replace(" ", "")])
+    subprocess.Popen(["notify-send", "-a", "Поиск", "-t", "1500", "Скопировано", text])
+
+
+def act_web(q):
+    act_open("https://www.google.com/search?q=" + urllib.parse.quote(q))
+
+
+# ---------- интерфейс ----------
+
+class Search(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="Поиск")
+        self.set_wmclass(APP_ID, APP_ID)
+        self.set_default_size(WIDTH, HEIGHT)
+        self.set_size_request(WIDTH, HEIGHT)
+        self.set_resizable(False)
+        self.set_decorated(False)
+        self.set_app_paintable(True)
+        vis = self.get_screen().get_rgba_visual()
+        if vis:
+            self.set_visual(vis)
+
+        self.apps = load_apps()
+        self.windows = load_windows()
+        # значок окна берём у его программы: по id .desktop-файла и StartupWMClass
+        self.icons = {}
+        for a in self.apps:
+            info, icon = a["info"], a["info"].get_icon()
+            if not icon:
+                continue
+            self.icons.setdefault((info.get_id() or "").removesuffix(".desktop").lower(), icon)
+            if isinstance(info, Gio.DesktopAppInfo) and info.get_startup_wm_class():
+                self.icons.setdefault(info.get_startup_wm_class().lower(), icon)
+        self.gen = 0
+        self.timer = None
+        self.files = []
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.add(outer)
+        self.panel = Gtk.EventBox()
+        self.panel.get_style_context().add_class("panel")
+        self.panel.set_valign(Gtk.Align.START)
+        self.panel.connect("size-allocate", self.on_panel_size)
+        outer.pack_start(self.panel, False, False, 0)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_border_width(10)
+        self.panel.add(box)
+
+        self.entry = Gtk.SearchEntry()
+        self.entry.set_placeholder_text("Программы, файлы, окна, 2+2…")
+        self.entry.connect("search-changed", self.on_changed)
+        self.entry.connect("activate", lambda *_: self.activate_selected())
+        box.pack_start(self.entry, False, False, 0)
+
+        self.list = Gtk.ListBox()
+        self.list.set_selection_mode(Gtk.SelectionMode.BROWSE)
+        self.list.set_activate_on_single_click(True)
+        self.list.connect("row-activated", lambda _l, row: self.run(row))
+        box.pack_start(self.list, False, False, 0)
+
+        self.hint = Gtk.Label(label="↑↓ выбор · Enter открыть · Esc закрыть", xalign=0)
+        self.hint.get_style_context().add_class("hint")
+        box.pack_start(self.hint, False, False, 0)
+
+        self.connect("key-press-event", self.on_key)
+        self.connect("destroy", self.on_destroy)
+
+    def on_destroy(self, *_):
+        try:
+            os.remove(STATE_H)
+        except OSError:
+            pass
+        Gtk.main_quit()
+
+    # --- построение строк ---
+    def row(self, kind_label, title, sub, icon, action, css=None):
+        r = Gtk.ListBoxRow()
+        r.action = action
+        h = Gtk.Box(spacing=10)
+        img = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DND) if icon else Gtk.Image()
+        img.set_pixel_size(28)
+        h.pack_start(img, False, False, 0)
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        t = Gtk.Label(label=title, xalign=0)
+        t.set_ellipsize(3)  # END
+        t.set_max_width_chars(1)   # иначе длинный текст растягивает окно вширь
+        t.get_style_context().add_class(css or "title")
+        v.pack_start(t, False, False, 0)
+        if sub:
+            s = Gtk.Label(label=sub, xalign=0)
+            s.set_ellipsize(1)  # START — у путей важен конец
+            s.set_max_width_chars(1)
+            s.get_style_context().add_class("sub")
+            v.pack_start(s, False, False, 0)
+        h.pack_start(v, True, True, 0)
+        k = Gtk.Label(label=kind_label)
+        k.get_style_context().add_class("kind")
+        h.pack_end(k, False, False, 0)
+        r.add(h)
+        return r
+
+    def rebuild(self):
+        q = self.entry.get_text().strip()
+        for c in self.list.get_children():
+            self.list.remove(c)
+        if not q:
+            self.list.hide()
+            return
+        ql = q.lower()
+        rows = []
+
+        res = calc(q)
+        if res is not None:
+            rows.append(self.row("калькулятор", f"= {res}", "Enter — скопировать",
+                                 Gio.ThemedIcon.new("accessories-calculator"),
+                                 lambda r=res: act_copy(r), css="calc"))
+
+        # окна и программы — в одном рейтинге; при равенстве программа выше окна
+        found = []
+        for c in self.windows:
+            sc = max(score(c["title"].lower(), "", ql), score(c["class"].lower(), "", ql) - 15)
+            if sc:
+                found.append((sc - 5, 1, "window", c))
+        for a in self.apps:
+            sc = score(a["low"], a["extra"], ql)
+            if sc:
+                found.append((sc, 0, "app", a))
+        found.sort(key=lambda x: (-x[0], x[1]))
+        taken = {"window": 0, "app": 0}
+        for _, _, kind, it in found:
+            if taken[kind] >= LIMITS[kind]:
+                continue
+            taken[kind] += 1
+            if kind == "app":
+                rows.append(self.row("программа", it["name"], it["sub"], it["info"].get_icon(),
+                                     lambda i=it["info"]: act_app(i)))
+            else:
+                rows.append(self.row("окно", it["title"] or it["class"],
+                                     f"{it['class']} · стол {it['workspace']['name']}",
+                                     self.window_icon(it),
+                                     lambda a=it["address"]: act_window(a)))
+
+        for p in self.files:
+            isdir = os.path.isdir(p)
+            rows.append(self.row("папка" if isdir else "файл", os.path.basename(p) or p,
+                                 short(os.path.dirname(p)), file_icon(p),
+                                 lambda p=p: act_open(p)))
+
+        rows.append(self.row("интернет", f"Искать «{q}» в Google", None,
+                             Gio.ThemedIcon.new_from_names(["internet-web-browser", "web-browser"]),
+                             lambda: act_web(q)))
+
+        for r in rows:
+            self.list.add(r)
+        self.list.show_all()
+        self.list.select_row(self.list.get_row_at_index(0))
+
+    def window_icon(self, c):
+        for key in (c["class"].lower(), c["initialClass"].lower()):
+            if key in self.icons:
+                return self.icons[key]
+        return Gio.ThemedIcon.new_from_names([c["class"], c["class"].lower(), "window"])
+
+    def on_panel_size(self, _w, alloc):
+        """Клики и наведение — только по панели: прозрачная часть окна пропускает их
+        к окнам под ней. Высоту панели читает hypr-popup-dismiss (клик мимо — закрыть)."""
+        import cairo
+        r = cairo.RectangleInt(alloc.x, alloc.y, alloc.width, alloc.height)
+        gw = self.get_window()
+        if gw:
+            gw.input_shape_combine_region(cairo.Region(r), 0, 0)
+        try:
+            with open(STATE_H, "w") as f:
+                f.write(str(alloc.y + alloc.height))
+        except OSError:
+            pass
+
+    # --- события ---
+    def on_changed(self, _e):
+        self.gen += 1
+        q = self.entry.get_text().strip()
+        if len(q) < 2:
+            self.files = []
+        self.rebuild()
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+        if len(q) >= 2 and calc(q) is None:
+            gen = self.gen
+            self.timer = GLib.timeout_add(150, self.start_files, q, gen)
+
+    def start_files(self, q, gen):
+        self.timer = None
+        threading.Thread(target=self.files_thread, args=(q, gen), daemon=True).start()
+        return False
+
+    def files_thread(self, q, gen):
+        found = baloo(q, LIMITS["file"])
+        GLib.idle_add(self.files_done, found, gen)
+
+    def files_done(self, found, gen):
+        if gen != self.gen:        # пока искали, запрос уже сменился
+            return False
+        sel = self.list.get_selected_row()
+        idx = sel.get_index() if sel else 0
+        self.files = found
+        self.rebuild()
+        r = self.list.get_row_at_index(idx)
+        if r:
+            self.list.select_row(r)
+        return False
+
+    def on_key(self, _w, ev):
+        k = ev.keyval
+        if k == Gdk.KEY_Escape:
+            self.close()
+            return True
+        if k in (Gdk.KEY_Down, Gdk.KEY_Up, Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            rows = self.list.get_children()
+            if not rows:
+                return True
+            sel = self.list.get_selected_row()
+            i = sel.get_index() if sel else -1
+            i += -1 if k in (Gdk.KEY_Up, Gdk.KEY_ISO_Left_Tab) else 1
+            i = max(0, min(len(rows) - 1, i))
+            self.list.select_row(rows[i])
+            self.entry.grab_focus_without_selecting()
+            return True
+        return False
+
+    def activate_selected(self):
+        r = self.list.get_selected_row() or self.list.get_row_at_index(0)
+        if r:
+            self.run(r)
+
+    def run(self, row):
+        self.close()               # спрятать (постоянный процесс окно не уничтожает)
+        row.action()
+
+    def reset(self):
+        """перед каждым показом: пустой запрос, свежий список окон"""
+        self.gen += 1
+        self.files = []
+        self.windows = load_windows()
+        self.entry.set_text("")
+        self.rebuild()
+        self.entry.grab_focus()
+        GLib.idle_add(self.reload_apps)
+
+    def reload_apps(self):
+        self.apps = load_apps()
+        return False
+
+
+def main():
+    prov = Gtk.CssProvider()
+    prov.load_from_data(CSS.encode())
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
+                                             Gtk.STYLE_PROVIDER_PRIORITY_USER)
+    GLib.set_prgname(APP_ID)
+    Gdk.set_program_class(APP_ID)
+    w = Search()
+    from hypr_popup import Resident
+    Resident(w, kind="search", app_id=APP_ID, place="top", on_show=w.reset).start()
+    w.list.hide()
+    w.entry.grab_focus()
+    Gtk.main()
+
+
+main()

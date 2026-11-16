@@ -1,0 +1,88 @@
+# Пакеты из официальных репозиториев Arch для этого набора. Строки с # пропускаются.
+# Ставит: ./install.sh --packages   (то же самое: sudo pacman -S --needed $(grep -v '^#' base.txt))
+
+# --- Hyprland и всё вокруг ---
+hyprland
+hyprlock
+hypridle
+hyprpaper
+hyprpicker
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+qt5-wayland
+qt6-wayland
+
+# --- панель, уведомления, запуск, терминал ---
+waybar
+mako
+fuzzel
+foot
+
+# --- буфер обмена и скриншоты ---
+wl-clipboard
+cliphist
+grim
+slurp
+
+# --- звук (PipeWire) ---
+pipewire
+pipewire-pulse
+pipewire-alsa
+wireplumber
+libpulse
+pavucontrol
+playerctl
+
+# --- сеть и Bluetooth (окно Wi-Fi/VPN работает через nmcli) ---
+networkmanager
+plasma-nm
+kcmutils
+bluez
+bluez-utils
+blueman
+
+# --- Python для наших окон (поиск, буфер, Wi-Fi, громкость, Alt+Tab) ---
+python
+python-gobject
+python-cairo
+gtk3
+libnotify
+
+# --- поиск файлов в Alt+Space: индекс KDE + fd ---
+baloo
+fd
+
+# --- KDE-программы и вид (Dolphin, тема Breeze, агент паролей) ---
+dolphin
+kio-extras
+ark
+kded
+breeze
+breeze-icons
+breeze-gtk
+plasma-integration
+polkit-kde-agent
+archlinux-xdg-menu
+
+# --- шрифты ---
+ttf-ibm-plex
+ttf-jetbrains-mono-nerd
+ttf-hack
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+
+# --- прочее ---
+sddm
+flatpak
+btop
+mpv
+brightnessctl
+
+# --- сборка плагинов Hyprland через hyprpm (обзор столов hyprexpo) ---
+base-devel
+git
+cmake
+meson
+cpio
+pkgconf

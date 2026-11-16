@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Держит трей за waybar в сеансе Hyprland.
+
+Трей (StatusNotifier) работает так: один процесс владеет D-Bus-именем
+org.kde.StatusNotifierWatcher, программы регистрируют у него свои значки, а панель берёт
+их оттуда. В Hyprland это имя держит waybar.
+
+Беда: KDE-программы (настройки сети kcmshell6, Dolphin, Discover) по D-Bus будят kded6,
+а kded6 при старте забирает это имя себе. Значки начинают регистрироваться у него,
+и трей waybar пустеет. Отключить это в kded6rc нельзя — конфиг общий с Plasma, и там
+пропал бы трей.
+
+Поэтому здесь: как только владельцем имени становится не waybar — завершаем этот процесс
+(в Hyprland kded6 ничего нужного не делает; понадобится — D-Bus запустит его снова, и мы
+снова его уберём) и перезапускаем waybar (его поднимает hypr-respawn). Waybar снова
+забирает имя, программы видят нового владельца и регистрируют значки заново.
+
+Запуск: exec-once через hypr-respawn в hyprland.conf.
+"""
+import os
+import signal
+import subprocess
+import time
+
+NAME = "org.kde.StatusNotifierWatcher"
+
+
+def owner_pid():
+    r = subprocess.run(["busctl", "--user", "status", NAME], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        if line.startswith("PID="):
+            return int(line[4:])
+    return None
+
+
+def comm(pid):
+    try:
+        return open(f"/proc/{pid}/comm").read().strip()
+    except OSError:
+        return ""
+
+
+def check():
+    pid = owner_pid()
+    if pid is None or comm(pid) == "waybar":
+        return
+    who = comm(pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    time.sleep(0.5)
+    subprocess.run(["pkill", "-x", "waybar"])   # hypr-respawn поднимет его заново
+    subprocess.run(["notify-send", "-a", "Hyprland", "-u", "low", "Трей",
+                    f"{who} забрал трей у waybar — вернул"], check=False)
+
+
+def main():
+    time.sleep(5)   # дать waybar спокойно стартовать при входе
+    check()
+    mon = subprocess.Popen(
+        ["dbus-monitor", "--session",
+         f"type='signal',sender='org.freedesktop.DBus',member='NameOwnerChanged',arg0='{NAME}'"],
+        stdout=subprocess.PIPE, text=True)
+    for line in mon.stdout:
+        if "member=NameOwnerChanged" in line:
+            time.sleep(1)   # дождаться, пока смена владельца устоится
+            check()
+
+
+if __name__ == "__main__":
+    main()

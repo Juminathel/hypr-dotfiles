@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Переключатель окон для Hyprland через fuzzel: видит все окна на всех воркспейсах."""
+import json, subprocess, sys
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+wins = [w for w in json.loads(hypr("clients", "-j") or "[]")
+        if w.get("mapped") and w["workspace"]["id"] > 0]
+if not wins:
+    sys.exit(0)
+
+active = json.loads(hypr("activewindow", "-j") or "{}").get("address")
+# самое свежее сверху: текущее окно в конец, чтобы Alt+Tab сразу целился в предыдущее
+wins.sort(key=lambda w: (w["address"] == active, w["workspace"]["id"]))
+
+lines, addrs = [], []
+for w in wins:
+    mark = "▸" if w["address"] == active else " "
+    title = (w.get("title") or "")[:60]
+    lines.append(f"{mark} {w['workspace']['id']}  {w.get('class','?'):<18} {title}")
+    addrs.append(w["address"])
+
+sel = subprocess.run(
+    ["fuzzel", "--dmenu", "--index", "--prompt=окно ❯ ", "--lines=12", "--width=76"],
+    input="\n".join(lines), capture_output=True, text=True)
+if sel.returncode != 0 or not sel.stdout.strip():
+    sys.exit(0)
+subprocess.run(["hyprctl", "dispatch", "focuswindow", f"address:{addrs[int(sel.stdout.strip())]}"])

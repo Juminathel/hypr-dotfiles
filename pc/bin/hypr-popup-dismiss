@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Закрывает «всплывающие» окна (шпаргалка Super+/, окна с панели), когда кликают мимо них.
+
+Вызывается на каждый левый клик: в hyprland.conf стоит `bindn = , mouse:272, ...`.
+Флаг n значит, что клик не перехватывается и доходит до приложения как обычно.
+Через фокус это сделать нельзя: follow_mouse = 1 переводит фокус простым наведением,
+и окно закрывалось бы, стоило только увести мышь.
+
+Клик по панели (waybar) тоже закрывает окна (например, клик по номеру стола) — кроме
+клика по тому значку, который открыл окно: его повторный клик сам закрывает окно
+(hypr-panel-popup, hypr-wifi-menu), а иначе окно закрылось бы здесь и тут же открылось
+снова. Какой значок открыл окно, они записывают в $XDG_RUNTIME_DIR/hypr-panel-popup
+(«вид x_курсора»).
+
+Меню Wi-Fi — это fuzzel (слой launcher, не окно), его закрываем, убивая процесс.
+"""
+import json
+import os
+import subprocess
+import time
+
+# class окон, которые ведут себя как всплывающие
+POPUPS = {
+    "hypr-help",             # шпаргалка Super+/
+    "hypr-cliphist",         # история буфера Super+V
+    "Hypr-cliphist",
+    "hypr-volume",           # клик по громкости на панели
+    "Hypr-volume",
+    "hypr-wifi",             # клик по значку сети на панели
+    "Hypr-wifi",
+    "pavucontrol",           # полный микшер
+    "org.pulseaudio.pavucontrol",
+    "nm-connection-editor",
+    "blueman-manager",
+    "btop-popup",            # клик по RAM на панели
+    "wifi-popup",            # старый выбор сети (nmtui)
+    "kcm_networkmanagement", # ПКМ по значку сети — настройки KDE
+    "hypr-search",           # быстрый поиск Alt+Space
+}
+PANEL = "waybar"
+STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-panel-popup")
+WIFI_FUZZEL = "^fuzzel --dmenu .*--prompt Wi-Fi"
+SEARCH_H = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-search-h")
+ICON_HALF = 22               # клик в пределах ±22 px от открывшего значка — это сам значок
+
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+def inside(px, py, x, y, w, h):
+    return x <= px < x + w and y <= py < y + h
+
+
+def wifi_menu_open():
+    return subprocess.run(["pgrep", "-f", WIFI_FUZZEL], capture_output=True).returncode == 0
+
+
+def area(c):
+    """(x, y, w, h) окна; у hypr-search окно больше видимой панели (низ прозрачный),
+    её высоту он пишет в $XDG_RUNTIME_DIR/hypr-search-h"""
+    x, y = c["at"]
+    w, h = c["size"]
+    if c["class"] == "hypr-search":
+        try:
+            h = min(h, int(open(SEARCH_H).read()))
+        except (OSError, ValueError):
+            pass
+    return x, y, w, h
+
+
+def opener_x():
+    try:
+        return float(open(STATE).read().split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def main():
+    popups = [c for c in json.loads(hypr("clients", "-j") or "[]")
+              if c["class"] in POPUPS and c["mapped"] and not c["hidden"]
+              and c["workspace"]["id"] > 0]   # спрятанные на скрытом столе (hypr_popup.py) не в счёт
+    wifi = wifi_menu_open()
+    if not popups and not wifi:
+        return
+    px, py = (float(v) for v in hypr("cursorpos").split(","))
+
+    on_panel = False
+    for mon in json.loads(hypr("layers", "-j") or "{}").values():
+        for layers in mon["levels"].values():
+            for l in layers:
+                if not inside(px, py, l["x"], l["y"], l["w"], l["h"]):
+                    continue
+                if l["namespace"] == "launcher":
+                    return                    # клик внутри меню fuzzel
+                if l["namespace"] == PANEL:
+                    on_panel = True
+
+    if on_panel:
+        # waybar запускает окно по этому же нажатию. Ждём чуть-чуть: если клик открыл другое
+        # окно панели (STATE только что переписан), старое закроет hypr-panel-popup сам —
+        # после появления нового, без пустой паузы и прыжка фокуса.
+        t0 = time.time()
+        time.sleep(0.15)
+        try:
+            if os.path.getmtime(STATE) >= t0 - 0.1:
+                return
+        except OSError:
+            pass
+        ox = opener_x()
+        if ox is not None and abs(px - ox) <= ICON_HALF:
+            return                            # клик по открывшему значку — он сам закроет
+    elif any(inside(px, py, *area(c)) for c in popups):
+        # клик внутри любого из всплывающих окон — ничего не трогаем
+        # (у pavucontrol и nm-connection-editor бывает по нескольку окон одного класса)
+        return
+
+    if popups:
+        hypr("--batch", " ; ".join(f"dispatch closewindow address:{c['address']}" for c in popups))
+    if wifi:
+        subprocess.run(["pkill", "-f", WIFI_FUZZEL])
+    try:
+        os.remove(STATE)
+    except OSError:
+        pass
+
+
+if __name__ == "__main__":
+    main()

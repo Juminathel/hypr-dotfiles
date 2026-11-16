@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# mpv в режиме «картинка в картинке»: маленькое безрамочное окно в правом нижнем углу.
+# Перемещение — ЛКМ по видео. Ресайз — Meta+ПКМ-перетаскивание или Alt+ +/-.
+# В Hyprland --ontop/--geometry не работают (Wayland): там окно получает app-id mpv-pip,
+# и всё делает windowrule mpv-pip в hyprland.conf. В KDE ничего не меняется.
+extra=()
+[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && extra=(--wayland-app-id=mpv-pip)
+exec mpv \
+    "${extra[@]}" \
+    --ontop \
+    --no-border \
+    --autofit=30% \
+    --geometry=99%:99% \
+    --window-dragging=yes \
+    --keepaspect-window=yes \
+    "$@"

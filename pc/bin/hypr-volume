@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""Выпадающее окно громкости по клику на значок звука в waybar (вместо pavucontrol).
+
+В том же стиле, что история буфера (Super+V): тёмный фон, IBM Plex Mono, синяя обводка.
+  Вывод        — устройство (наушники / HDMI…), громкость, выключить звук
+  Микрофон     — громкость, выключить
+  Программы    — громкость каждой программы, которая сейчас играет звук
+  «микшер…»    — полный pavucontrol
+
+Открывается через hypr-panel-popup volume (позиция под значком, повторный клик — закрыть,
+клик мимо — закрыть через hypr-popup-dismiss). Esc тоже закрывает.
+Изменения со стороны (клавиши громкости, другие программы) подхватываются через pactl subscribe.
+"""
+import json
+import os
+import subprocess
+import sys
+import threading
+
+APP_ID = "hypr-volume"
+WIDTH = 380
+MAX_PCT = 100
+
+CSS = """
+* { font-family: "IBM Plex Mono", "JetBrainsMono Nerd Font"; font-size: 11pt; color: #cdd6f4;
+    outline: none; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }
+window, window:backdrop { background-color: rgba(30, 30, 46, 0.94); background-image: none; }
+.title, .title:backdrop { color: #89b4fa; font-weight: bold; }
+.section, .section:backdrop { color: #7f849c; font-size: 9pt; margin-top: 6px; }
+.pct, .pct:backdrop { color: #9399b2; font-size: 10pt; min-width: 42px; }
+.app, .app:backdrop { color: #bac2de; font-size: 10pt; }
+.sep { background-color: #313244; min-height: 1px; margin: 4px 0; }
+
+scale trough, scale trough:backdrop { background-color: #45475a; border: none; border-radius: 4px;
+    min-height: 6px; background-image: none; }
+scale highlight, scale highlight:backdrop { background-color: #89b4fa; border: none;
+    border-radius: 4px; background-image: none; }
+scale.muted highlight, scale.muted highlight:backdrop { background-color: #585b70; }
+scale slider, scale slider:backdrop { background-color: #cdd6f4; border: none; border-radius: 9px;
+    min-width: 16px; min-height: 16px; margin: -6px; background-image: none; }
+scale slider:hover { background-color: #ffffff; }
+
+button, button:backdrop { background-color: transparent; background-image: none; border: none;
+    border-radius: 8px; padding: 2px 6px; min-height: 0; min-width: 0; }
+button:hover { background-color: rgba(69, 71, 90, 0.6); }
+button label { font-family: "JetBrainsMono Nerd Font"; font-size: 15pt; }
+button.muted label { color: #f38ba8; }
+button.link label, button.link:backdrop label { font-family: "IBM Plex Mono"; font-size: 10pt;
+    color: #89b4fa; }
+
+combobox button, combobox button:backdrop { background-color: #313244; border: 1px solid #45475a;
+    border-radius: 8px; padding: 4px 8px; }
+combobox button label { font-family: "IBM Plex Mono"; font-size: 10pt; }
+combobox arrow { color: #9399b2; }
+menu, .menu, menu:backdrop { background-color: #1e1e2e; border: 1px solid #45475a; }
+menuitem { padding: 6px 10px; }
+menuitem:hover { background-color: #45475a; }
+"""
+
+
+def pactl(*args):
+    return subprocess.run(["pactl", *args], capture_output=True, text=True).stdout
+
+
+def pjson(*args):
+    try:
+        return json.loads(pactl("-f", "json", *args) or "[]")
+    except ValueError:
+        return []
+
+
+def pct(obj):
+    vols = list(obj.get("volume", {}).values())
+    if not vols:
+        return 0
+    return round(sum(int(v["value_percent"].rstrip("%")) for v in vols) / len(vols))
+
+
+def sink_label(s):
+    """Короткое имя устройства: имя активного порта («Headphones», «HDMI / DisplayPort»)
+    вместо длинного описания контроллера («Ryzen HD Audio Controller Headphones»)."""
+    port = next((p["description"] for p in s.get("ports", []) if p["name"] == s.get("active_port")), "")
+    return port or s["description"]
+
+
+def main():
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import Gdk, GLib, Gtk, Pango
+
+    GLib.set_prgname(APP_ID)
+    Gdk.set_program_class(APP_ID)
+    css = Gtk.CssProvider()
+    css.load_from_data(CSS.encode())
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    win = Gtk.Window(title="Громкость")
+    win.set_default_size(WIDTH, -1)
+    win.connect("destroy", Gtk.main_quit)
+    win.connect("key-press-event",
+                lambda _w, ev: (win.close(), True)[1] if ev.keyval == Gdk.KEY_Escape else False)
+
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    outer.set_border_width(14)
+    win.add(outer)
+    title = Gtk.Label(label="звук", xalign=0)
+    title.get_style_context().add_class("title")
+    outer.pack_start(title, False, False, 0)
+    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    outer.pack_start(body, False, False, 0)
+
+    ui = {"busy": set(), "quiet": set(), "rows": {}}   # rows: key → (scale, pct_label, mute_btn, icons)
+
+    def section(text):
+        lab = Gtk.Label(label=text, xalign=0)
+        lab.get_style_context().add_class("section")
+        body.pack_start(lab, False, False, 0)
+
+    def slider_row(key, value, muted, icons, set_vol, toggle_mute, caption=None):
+        if caption:
+            lab = Gtk.Label(label=caption, xalign=0)
+            lab.get_style_context().add_class("app")
+            lab.set_ellipsize(Pango.EllipsizeMode.END)
+            body.pack_start(lab, False, False, 0)
+        row = Gtk.Box(spacing=6)
+        btn = Gtk.Button(label="")
+        btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn.connect("clicked", lambda _b: toggle_mute())
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, MAX_PCT, 1)
+        scale.set_draw_value(False)
+        scale.set_hexpand(True)
+        scale.set_value(value)
+        p = Gtk.Label(label=f"{value}%", xalign=1)
+        p.get_style_context().add_class("pct")
+
+        def changed(s):
+            if key in ui["quiet"]:
+                return
+            v = int(s.get_value())
+            p.set_text(f"{v}%")
+            ui["busy"].add(key)
+            set_vol(v)
+            GLib.timeout_add(400, lambda: (ui["busy"].discard(key), False)[1])
+        scale.connect("value-changed", changed)
+        row.pack_start(btn, False, False, 0)
+        row.pack_start(scale, True, True, 0)
+        row.pack_start(p, False, False, 0)
+        body.pack_start(row, False, False, 0)
+        ui["rows"][key] = (scale, p, btn, icons)
+        paint(key, value, muted)
+
+    def paint(key, value, muted):
+        scale, p, btn, icons = ui["rows"][key]
+        if key not in ui["busy"]:
+            if int(scale.get_value()) != value:
+                ui["quiet"].add(key)   # без обратной отправки громкости в pactl
+                scale.set_value(value)
+                ui["quiet"].discard(key)
+            p.set_text(f"{value}%")
+        if muted:
+            icon = icons[0]
+        else:
+            icon = icons[1] if value < 34 else icons[2] if value < 67 else icons[3]
+        btn.set_label(icon)
+        for w in (btn, scale):
+            (w.get_style_context().add_class if muted else
+             w.get_style_context().remove_class)("muted")
+
+    SPK = ("󰝟", "󰕿", "󰖀", "󰕾")
+    MIC = ("󰍭", "󰍬", "󰍬", "󰍬")
+    APP = ("󰝟", "󰕿", "󰖀", "󰕾")
+
+    def snapshot():
+        sinks = pjson("list", "sinks")
+        sources = [s for s in pjson("list", "sources") if not s["name"].endswith(".monitor")]
+        inputs = pjson("list", "sink-inputs")
+        dsink = pactl("get-default-sink").strip()
+        dsrc = pactl("get-default-source").strip()
+        return sinks, sources, inputs, dsink, dsrc
+
+    def layout_key(snap):
+        sinks, sources, inputs, dsink, dsrc = snap
+        return (tuple(s["name"] for s in sinks), dsink, dsrc,
+                tuple(i["index"] for i in inputs))
+
+    state = {"layout": None}
+
+    def build(snap):
+        sinks, sources, inputs, dsink, dsrc = snap
+        for c in body.get_children():
+            body.remove(c)
+        ui["rows"].clear()
+
+        section("вывод")
+        if len(sinks) > 1:
+            combo = Gtk.ComboBoxText()
+            for s in sinks:
+                combo.append(s["name"], sink_label(s))
+            combo.set_active_id(dsink)
+            for cell in combo.get_cells():
+                cell.set_property("ellipsize", Pango.EllipsizeMode.END)
+            combo.connect("changed", lambda c: c.get_active_id() and
+                          pactl("set-default-sink", c.get_active_id()))
+            body.pack_start(combo, False, False, 2)
+        sink = next((s for s in sinks if s["name"] == dsink), sinks[0] if sinks else None)
+        if sink:
+            slider_row("sink", pct(sink), sink["mute"], SPK,
+                       lambda v: pactl("set-sink-volume", "@DEFAULT_SINK@", f"{v}%"),
+                       lambda: pactl("set-sink-mute", "@DEFAULT_SINK@", "toggle"),
+                       caption=None if len(sinks) > 1 else sink_label(sink))
+
+        src = next((s for s in sources if s["name"] == dsrc), sources[0] if sources else None)
+        if src:
+            section("микрофон")
+            slider_row("source", pct(src), src["mute"], MIC,
+                       lambda v: pactl("set-source-volume", "@DEFAULT_SOURCE@", f"{v}%"),
+                       lambda: pactl("set-source-mute", "@DEFAULT_SOURCE@", "toggle"))
+
+        if inputs:
+            section("программы")
+            for i in inputs:
+                pr = i.get("properties", {})
+                name = pr.get("application.name") or pr.get("application.process.binary") or "?"
+                media = pr.get("media.name", "")
+                cap = name if not media or media == name else f"{name} — {media}"
+                idx = str(i["index"])
+                slider_row(f"in{idx}", pct(i), i["mute"], APP,
+                           lambda v, idx=idx: pactl("set-sink-input-volume", idx, f"{v}%"),
+                           lambda idx=idx: pactl("set-sink-input-mute", idx, "toggle"),
+                           caption=cap)
+
+        sep = Gtk.Box()
+        sep.get_style_context().add_class("sep")
+        body.pack_start(sep, False, False, 4)
+        link = Gtk.Button(label="микшер…")
+        link.get_style_context().add_class("link")
+        link.set_halign(Gtk.Align.END)
+
+        def full_mixer(_b):
+            subprocess.Popen(["pavucontrol"], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            win.close()
+        link.connect("clicked", full_mixer)
+        body.pack_start(link, False, False, 0)
+        body.show_all()
+        win.resize(WIDTH, 1)
+        state["layout"] = layout_key(snap)
+
+    def refresh():
+        snap = snapshot()
+        if layout_key(snap) != state["layout"]:
+            build(snap)
+            return False
+        sinks, sources, inputs, dsink, dsrc = snap
+        sink = next((s for s in sinks if s["name"] == dsink), None)
+        if sink and "sink" in ui["rows"]:
+            paint("sink", pct(sink), sink["mute"])
+        src = next((s for s in sources if s["name"] == dsrc), None)
+        if src and "source" in ui["rows"]:
+            paint("source", pct(src), src["mute"])
+        for i in inputs:
+            k = f"in{i['index']}"
+            if k in ui["rows"]:
+                paint(k, pct(i), i["mute"])
+        return False
+
+    pending = {"id": 0}
+
+    def schedule_refresh():
+        if not pending["id"]:
+            def run():
+                pending["id"] = 0
+                return refresh()
+            pending["id"] = GLib.timeout_add(80, run)
+        return False
+
+    def die_with_parent():
+        """pactl subscribe сам не завершается, пока не придёт событие, — без этого после
+        закрытия окна он оставался висеть сиротой. Ядро убьёт его вместе с нами."""
+        import ctypes
+        ctypes.CDLL("libc.so.6").prctl(1, 15)   # PR_SET_PDEATHSIG, SIGTERM
+
+    def watch():
+        p = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, text=True,
+                             preexec_fn=die_with_parent)
+        GLib.idle_add(lambda: (win.connect("destroy", lambda *_: p.terminate()), False)[1])
+        for line in p.stdout:
+            if any(w in line for w in ("sink", "source", "server")):
+                GLib.idle_add(schedule_refresh)
+
+    build(snapshot())
+    threading.Thread(target=watch, daemon=True).start()
+    if "--daemon" in sys.argv:
+        # постоянный процесс: окно заранее готово и только показывается (hypr_popup.py).
+        # Обновлять при показе не нужно — pactl subscribe держит его в актуальном виде.
+        from hypr_popup import Resident
+        Resident(win, kind="volume", app_id=APP_ID, place="cursor", panel=True,
+                 focus=False).start()
+    else:
+        win.show_all()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

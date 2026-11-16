@@ -1,0 +1,4 @@
+#!/bin/sh
+# Старое имя: окна панели теперь постоянные, их показывает hypr-popup-show (hypr_popup.py).
+#   hypr-panel-popup volume | wifi
+exec "$HOME/.local/bin/hypr-popup-show" "${1:-volume}"

@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""История буфера (Super+V): своё окно на GTK3 вместо fuzzel.
+
+Поиска нет, просто список. Текст идёт обычными строками, картинки (PrtSc, «Копировать
+изображение», скопированный файл-картинка) миниатюрой: маленькой, а выбранная — крупно. fuzzel так не умеет:
+у него все строки одной высоты, и большая картинка там появляется только при поиске.
+
+  ↑ ↓ / колесо  — выбор      Enter / клик — скопировать и закрыть
+  Delete        — удалить запись из истории      Esc / клик мимо / Super+V — закрыть
+
+Миниатюры лежат в ~/.cache/cliphist-thumbs/<id>.png, их делаем один раз для каждой
+записи и удаляем, когда запись уходит из истории.
+"""
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+from urllib.parse import unquote, urlparse
+
+APP_ID = "hypr-cliphist"
+THUMBS = os.path.expanduser("~/.cache/cliphist-thumbs")
+THUMB_MAX = (640, 480)      # файл миниатюры
+SHOW_W, SHOW_H = 520, 300   # миниатюра выбранной строки
+SMALL_W, SMALL_H = 260, 90  # остальные миниатюры — чтобы пара картинок не занимала всё окно
+MAX_ITEMS = 150
+BINARY = re.compile(r"^\[\[ binary data (.+?) (png|jpe?g|webp|bmp|gif|tiff?) (\d+)x(\d+) \]\]$")
+IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".avif")
+
+CSS = """
+/* Тема GTK (Breeze/Adwaita) красит выбор своим синим, рисует рамку фокуса и в
+   неактивном окне (:backdrop) гасит цвета. Всё это перебиваем, состояния одинаковые. */
+* { font-family: "IBM Plex Mono"; font-size: 12pt; color: #cdd6f4;
+    outline: none; outline-width: 0; -gtk-outline-radius: 0;
+    box-shadow: none; text-shadow: none; -gtk-icon-shadow: none; }
+window, window:backdrop { background-color: rgba(30, 30, 46, 0.94); background-image: none; }
+scrolledwindow, viewport, list, list:backdrop,
+scrolledwindow:backdrop, viewport:backdrop { background-color: transparent; background-image: none;
+    border: none; }
+row, row:backdrop { padding: 6px 14px; border-radius: 8px; margin: 1px 8px;
+    background-color: transparent; background-image: none; border: 2px solid transparent; }
+row:hover, row:hover:backdrop { background-color: rgba(69, 71, 90, 0.5); }
+row:selected, row:selected:focus, row:selected:hover, row:selected:backdrop,
+row:selected:focus:backdrop { background-color: #45475a; background-image: none;
+    border: 2px solid #89b4fa; }
+row label, row:selected label, row label:backdrop, row:selected label:backdrop,
+label:backdrop { color: #cdd6f4; }
+.meta, .meta:backdrop, row:selected .meta, row:selected .meta:backdrop { color: #9399b2; font-size: 10pt; }
+.title, .title:backdrop { color: #89b4fa; font-weight: bold; padding: 10px 16px 6px 16px; }
+.empty, .empty:backdrop { color: #7f849c; padding: 30px; }
+scrollbar, scrollbar:backdrop { background-color: transparent; border: none; }
+scrollbar slider, scrollbar slider:backdrop { background-color: #585b70; border: none;
+    border-radius: 6px; min-width: 6px; }
+scrollbar slider:hover { background-color: #7f849c; }
+image, image:backdrop { opacity: 1; -gtk-icon-effect: none; }
+"""
+
+
+def hypr(*args):
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+def toggle_off():
+    """Super+V при открытом окне — закрыть его и выйти."""
+    try:
+        wins = [c for c in json.loads(hypr("clients", "-j") or "[]")
+                if c["class"].lower() == APP_ID]
+    except Exception:
+        return False
+    for c in wins:
+        hypr("dispatch", "closewindow", f"address:{c['address']}")
+    return bool(wins)
+
+
+def make_thumb(dst, data=None, path=None):
+    if os.path.exists(dst):
+        return True
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(data) if data is not None else path)
+        im.thumbnail(THUMB_MAX)
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGBA")
+        im.save(dst + ".tmp", "PNG")
+        os.replace(dst + ".tmp", dst)
+        return True
+    except Exception:
+        return False
+
+
+def image_file_from_text(text):
+    first = text.strip().split()[0] if text.strip() else ""
+    if first.startswith("file://") and first.lower().endswith(IMG_EXT):
+        p = unquote(urlparse(first).path)
+        return p if os.path.isfile(p) else None
+    if first.startswith("/") and first.lower().endswith(IMG_EXT) and os.path.isfile(first):
+        return first
+    return None
+
+
+def load_entries():
+    """[(id, строка cliphist, подпись, путь миниатюры или None)]"""
+    os.makedirs(THUMBS, exist_ok=True)
+    lines = subprocess.run(["cliphist", "list"], capture_output=True,
+                           text=True, errors="replace").stdout.splitlines()
+    entries, keep = [], set()
+    for line in lines:
+        cid, _, preview = line.partition("\t")
+        if not cid.isdigit():
+            continue
+        thumb = os.path.join(THUMBS, cid + ".png")
+        label, icon = preview, None
+        m = BINARY.match(preview)
+        if m:
+            size, fmt, w, h = m.groups()
+            data = None if os.path.exists(thumb) else \
+                subprocess.run(["cliphist", "decode", cid], capture_output=True).stdout
+            if make_thumb(thumb, data=data):
+                icon = thumb
+            label = f"картинка {w}×{h} · {fmt} · {size}"
+        else:
+            path = image_file_from_text(preview)
+            if path and make_thumb(thumb, path=path):
+                icon = thumb
+                label = f"файл {os.path.basename(path)}"
+        if icon:
+            keep.add(cid + ".png")
+        entries.append((cid, line, label, icon))
+    for f in os.listdir(THUMBS):
+        if f not in keep:
+            try:
+                os.remove(os.path.join(THUMBS, f))
+            except OSError:
+                pass
+    return entries[:MAX_ITEMS]
+
+
+def main():
+    daemon = "--daemon" in sys.argv
+    if not daemon and toggle_off():
+        return
+
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("Gdk", "3.0")
+    from gi.repository import GLib, Gdk, GdkPixbuf, Gtk, Pango
+
+    # app-id на Wayland — по нему правила окна в hyprland.conf. GTK3 берёт его из
+    # program class, а тот по умолчанию — prgname с заглавной буквы («Hypr-cliphist»).
+    GLib.set_prgname(APP_ID)
+    Gdk.set_program_class(APP_ID)
+    css = Gtk.CssProvider()
+    css.load_from_data(CSS.encode())
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    win = Gtk.Window(title="Буфер обмена")
+    win.set_default_size(SHOW_W + 60, 680)
+    win.connect("destroy", Gtk.main_quit)
+
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    win.add(box)
+    title = Gtk.Label(label="буфер обмена", xalign=0)
+    title.get_style_context().add_class("title")
+    box.pack_start(title, False, False, 0)
+
+    empty = Gtk.Label(label="история пуста")
+    empty.get_style_context().add_class("empty")
+    empty.set_no_show_all(True)
+    box.pack_start(empty, True, True, 0)
+
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    box.pack_start(scroll, True, True, 0)
+    listbox = Gtk.ListBox()
+    listbox.set_selection_mode(Gtk.SelectionMode.BROWSE)
+    listbox.set_activate_on_single_click(True)
+    scroll.add(listbox)
+
+    cache = {}      # строка cliphist → готовая строка списка (постоянный процесс их не пересоздаёт)
+
+    def make_row(cid, line, label, icon):
+        row = Gtk.ListBoxRow()
+        row.cid, row.line, row.img, row.pb_small, row.pb_big = cid, line, None, None, None
+        if icon:
+            v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            try:
+                row.pb_big = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon, SHOW_W, SHOW_H, True)
+                row.pb_small = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon, SMALL_W, SMALL_H, True)
+                img = Gtk.Image.new_from_pixbuf(row.pb_small)
+                row.img = img
+                img.set_halign(Gtk.Align.START)
+                v.pack_start(img, False, False, 0)
+            except GLib.Error:
+                pass
+            meta = Gtk.Label(label=label, xalign=0)
+            meta.get_style_context().add_class("meta")
+            v.pack_start(meta, False, False, 0)
+            row.add(v)
+        else:
+            text = " ".join(label.split())
+            lab = Gtk.Label(label=text, xalign=0)
+            lab.set_ellipsize(Pango.EllipsizeMode.END)
+            lab.set_max_width_chars(60)
+            row.add(lab)
+        row.show_all()
+        return row
+
+    # крупно — только выбранная картинка, остальные маленькими
+    state = {"big": None}
+
+    def populate():
+        entries = load_entries()
+        lines = [e[1] for e in entries]
+        if [r.line for r in listbox.get_children()] != lines:
+            for r in listbox.get_children():
+                listbox.remove(r)
+            fresh = {}
+            for cid, line, label, icon in entries:
+                row = cache.get(line) or make_row(cid, line, label, icon)
+                if row.img is not None:
+                    row.img.set_from_pixbuf(row.pb_small)
+                fresh[line] = row
+                listbox.add(row)
+            cache.clear()
+            cache.update(fresh)
+        state["big"] = None
+        empty.set_visible(not entries)
+        scroll.set_visible(bool(entries))
+        first = listbox.get_row_at_index(0)
+        if first is not None:
+            listbox.select_row(first)
+            first.grab_focus()
+        scroll.get_vadjustment().set_value(0)
+
+    def copy(row):
+        data = subprocess.run(["cliphist", "decode", row.cid], capture_output=True).stdout
+        subprocess.run(["wl-copy"], input=data)   # wl-copy сам уходит в фон и держит буфер
+        win.close()
+
+    def on_key(_w, ev):
+        if ev.keyval == Gdk.KEY_Escape:
+            win.close()
+            return True
+        if ev.keyval == Gdk.KEY_Delete:
+            row = listbox.get_selected_row()
+            if row is not None:
+                subprocess.run(["cliphist", "delete"], input=row.line + "\n", text=True)
+                idx = row.get_index()
+                listbox.remove(row)
+                cache.pop(row.line, None)
+                nxt = listbox.get_row_at_index(idx) or listbox.get_row_at_index(idx - 1)
+                if nxt is not None:
+                    listbox.select_row(nxt)
+                    nxt.grab_focus()
+            return True
+        return False
+
+    listbox.connect("row-activated", lambda _lb, row: copy(row))
+
+    def on_selected(_lb, row):
+        old = state["big"]
+        if old is not None and old is not row and old.img is not None:
+            old.img.set_from_pixbuf(old.pb_small)
+        if row is not None and row.img is not None:
+            row.img.set_from_pixbuf(row.pb_big)
+            GLib.idle_add(lambda: (row.grab_focus(), False)[1])  # прокрутить к выросшей строке
+        state["big"] = row
+
+    listbox.connect("row-selected", on_selected)
+    win.connect("key-press-event", on_key)
+    populate()
+    if daemon:
+        # постоянный процесс (hypr_popup.py): при каждом показе — свежая история
+        from hypr_popup import Resident
+        Resident(win, kind="cliphist", app_id=APP_ID, place="center", on_show=populate).start()
+    else:
+        win.show_all()
+        populate()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

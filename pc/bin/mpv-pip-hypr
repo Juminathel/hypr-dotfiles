@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# PiP для mpv в Hyprland: окно плавающее, закреплено поверх всех, в правом нижнем углу.
+# На Wayland mpv сам не умеет ontop/позицию/ресайз тайлового окна — это делает Hyprland.
+# Вызывается из ~/.config/mpv/input.conf (Ctrl+P / Ctrl+Shift+P) с PID mpv.
+# Вне Hyprland (KDE) сразу выходит — там работают обычные set ontop/border mpv.
+# Использование: mpv-pip-hypr on|off <pid mpv>
+set -u
+[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || exit 0
+
+mode=${1:-on}; pid=${2:-}
+W=576; H=324; GAP=16      # 30% ширины экрана 1920, 16:9; отступ от края
+
+win=$(hyprctl -j clients | python3 -c '
+import json, sys
+pid = int(sys.argv[1])
+for w in json.load(sys.stdin):
+    if w["pid"] == pid:
+        print(w["address"], int(w["floating"]), int(w["pinned"])); break
+' "$pid")
+[ -n "$win" ] || exit 0
+read -r addr floating pinned <<<"$win"
+
+if [ "$mode" = on ]; then
+    mon=$(hyprctl -j monitors | python3 -c '
+import json, sys
+m = next(m for m in json.load(sys.stdin) if m["focused"])
+print(m["x"] + int(m["width"] / m["scale"]), m["y"] + int(m["height"] / m["scale"]))')
+    read -r mx my <<<"$mon"
+    cmds="dispatch setfloating address:$addr"
+    [ "$pinned" = 1 ] || cmds+=" ; dispatch pin address:$addr"
+    cmds+=" ; dispatch resizewindowpixel exact $W $H,address:$addr"
+    cmds+=" ; dispatch movewindowpixel exact $((mx - W - GAP)) $((my - H - GAP)),address:$addr"
+else
+    cmds=""
+    [ "$pinned" = 1 ] && cmds="dispatch pin address:$addr ; "
+    cmds+="dispatch settiled address:$addr"
+fi
+hyprctl --batch "$cmds" >/dev/null

@@ -1,0 +1,40 @@
+font=IBM Plex Mono 10
+background-color=#1e1e2ee6
+text-color=#cdd6f4
+border-color=#89b4fa
+progress-color=over #45475a
+border-size=2
+border-radius=10
+padding=12
+margin=8
+default-timeout=5000
+ignore-timeout=1
+max-visible=5
+anchor=top-right
+layer=overlay
+width=360
+
+[urgency=low]
+border-color=#45475a
+default-timeout=3000
+
+[urgency=critical]
+border-color=#f38ba8
+text-color=#f38ba8
+default-timeout=0
+
+# Смена раскладки (Win+Space): крупно «EN»/«RU» по центру экрана, на полсекунды.
+# Шлёт ~/.local/bin/hypr-layout-osd. Должно стоять последним, чтобы перебить urgency выше.
+[app-name=hypr-layout-osd]
+anchor=center
+width=75
+height=45
+padding=9
+border-radius=8
+border-color=#89b4fa
+font=IBM Plex Mono Bold 15
+text-alignment=center
+format=%s
+default-timeout=700
+ignore-timeout=1
+history=0

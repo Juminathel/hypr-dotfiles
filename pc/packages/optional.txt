@@ -1,0 +1,11 @@
+# Необязательное — ставить по желанию: sudo pacman -S --needed $(grep -v '^#' optional.txt)
+
+# Значки Wine-программ (Wallpaper Engine и т.п.) в трее waybar — xembedsniproxy из plasma-workspace.
+# Пакет тяжёлый (тянет половину Plasma), без него просто не будет значков Wine в трее.
+plasma-workspace
+
+# WireGuard-утилиты (wg, wg-quick). Окну VPN не нужны: NetworkManager умеет WireGuard сам.
+wireguard-tools
+
+# Steam (нужен [multilib])
+steam

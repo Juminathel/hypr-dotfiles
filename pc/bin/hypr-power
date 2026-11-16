@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Меню завершения работы для Hyprland через fuzzel (ничего доустанавливать не нужно).
+set -u
+
+choice=$(printf '%s\n' \
+  "Заблокировать" \
+  "Выйти из сессии" \
+  "Сон" \
+  "Перезагрузить" \
+  "Выключить" \
+  | fuzzel --dmenu --index --prompt="питание ❯ " --lines=5 --width=24)
+
+case "$choice" in
+  0) hyprlock ;;
+  1) hyprctl dispatch exit ;;
+  2) loginctl lock-session; systemctl suspend ;;
+  3) systemctl reboot ;;
+  4) systemctl poweroff ;;
+  *) exit 0 ;;
+esac

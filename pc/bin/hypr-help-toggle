@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Переключатель окна-шпаргалки: открыть, если закрыто, и закрыть, если открыто.
+Привязан на Super+/ в hyprland.conf.
+
+Окно ищется по class=hypr-help через hyprctl — намеренно не через pkill -f,
+потому что шаблон совпал бы с командной строкой самого скрипта."""
+import json
+import os
+import signal
+import subprocess
+import sys
+
+APP_ID = "hypr-help"
+CMD = (
+    f"foot --app-id={APP_ID} --font='IBM Plex Mono:size=9' "
+    f"--window-size-chars=132x31 -e hypr-help"
+)
+
+
+def existing_windows():
+    """PID и адреса всех открытых окон шпаргалки."""
+    try:
+        out = subprocess.run(
+            ["hyprctl", "clients", "-j"], capture_output=True, text=True, timeout=5
+        ).stdout
+        return [w for w in json.loads(out or "[]") if w.get("class") == APP_ID]
+    except Exception:
+        return []
+
+
+def main():
+    wins = existing_windows()
+
+    if wins:
+        # окно есть — закрываем его штатно, через сам композитор
+        for w in wins:
+            subprocess.run(
+                ["hyprctl", "dispatch", "closewindow", f"address:{w['address']}"],
+                capture_output=True,
+                timeout=5,
+            )
+        # если какое-то окно не отреагировало, добиваем по PID
+        for w in wins:
+            pid = w.get("pid")
+            if pid and pid > 0:
+                try:
+                    os.kill(pid, 0)
+                except (ProcessLookupError, PermissionError):
+                    continue
+                else:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+        return 0
+
+    subprocess.run(["hyprctl", "dispatch", "exec", CMD], capture_output=True, timeout=5)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
