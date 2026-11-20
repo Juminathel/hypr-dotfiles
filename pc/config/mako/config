@@ -38,3 +38,20 @@ format=%s
 default-timeout=700
 ignore-timeout=1
 history=0
+
+# Смена стола боковыми кнопками мыши: ряд занятых столов монитора, текущий подсвечен.
+# Шлёт ~/.local/bin/hypr-ws-step. Тоже в конце — чтобы перебить urgency выше.
+[app-name=hypr-ws-osd]
+anchor=center
+width=360
+height=45
+padding=9
+border-radius=8
+border-color=#89b4fa
+font=IBM Plex Mono Bold 15
+text-alignment=center
+format=%b
+markup=1
+default-timeout=700
+ignore-timeout=1
+history=0

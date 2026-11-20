@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Боковые кнопки мыши: соседний рабочий стол этого монитора + окошко «какой стол».
+# Использование: hypr-ws-step -1 | +1
+# Окошко рисует mako: раздел [app-name=hypr-ws-osd] в ~/.config/mako/config.
+# Показываются занятые столы монитора, текущий выделен. С клавиатуры окошко не всплывает —
+# его вызывают только привязки mouse:275/276 в hyprland.lua.
+set -u
+
+step=${1:-+1}
+# Hyprland 0.57+: hyprctl dispatch принимает только Lua-выражение (см. hypr_dsp.py)
+hyprctl dispatch "hl.dsp.focus({ workspace = \"m$step\" })" >/dev/null
+
+text=$(hyprctl -j activeworkspace | jq -r --argjson all "$(hyprctl -j workspaces)" '
+    . as $cur
+    | [$all[] | select(.monitor == $cur.monitor and .id > 0) | .id] | sort
+    | map(if . == $cur.id then "<span foreground=\"#89b4fa\">\(.)</span>"
+          else "<span foreground=\"#6c7086\">\(.)</span>" end)
+    | join("  ")')
+
+# -r: при быстрых нажатиях обновляется то же окошко, а не копятся новые
+idf=${XDG_RUNTIME_DIR:-/tmp}/hypr-ws-osd.id
+id=$(cat "$idf" 2>/dev/null || echo 0)
+# разметку mako понимает только в теле уведомления (format=%b), заголовок «Стол» не показывается
+notify-send -a hypr-ws-osd -p -r "${id:-0}" -t 700 "Стол" "$text" >"$idf" 2>/dev/null

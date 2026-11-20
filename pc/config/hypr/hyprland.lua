@@ -380,9 +380,10 @@ bind(mainMod,              "N", exec(BIN .. "hypr-ws-insert go"))     -- про�
 bind(mainMod .. " + SHIFT", "N", exec(BIN .. "hypr-ws-insert move"))   -- унести туда активное окно
 bind(mainMod, "mouse_down", hl.dsp.focus({ workspace = "m+1" }))
 bind(mainMod, "mouse_up",   hl.dsp.focus({ workspace = "m-1" }))
--- боковые кнопки мыши: назад (BTN_SIDE) — предыдущий стол, вперёд (BTN_EXTRA) — следующий
-bind("", "mouse:275", hl.dsp.focus({ workspace = "m-1" }))
-bind("", "mouse:276", hl.dsp.focus({ workspace = "m+1" }))
+-- боковые кнопки мыши: назад (BTN_SIDE) — предыдущий стол, вперёд (BTN_EXTRA) — следующий;
+-- hypr-ws-step заодно показывает окошко с номером стола (только для мыши, не для клавиатуры)
+bind("", "mouse:275", exec(BIN .. "hypr-ws-step -1"))
+bind("", "mouse:276", exec(BIN .. "hypr-ws-step +1"))
 -- Win+Tab — панель как на Alt+Tab, но листаются рабочие столы (по недавности), а не окна
 -- (дальше — submap wintab ниже)
 bind(mainMod,              "TAB", exec(BIN .. "hypr-alttab-ctl start-ws"))
