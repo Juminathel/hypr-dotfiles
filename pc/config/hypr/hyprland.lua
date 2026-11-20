@@ -97,6 +97,9 @@ hl.on("hyprland.start", function()
 
     -- путь агента у дистрибутивов разный: Ubuntu — libexec в x86_64-linux-gnu, Arch — /usr/lib
     hl.exec_cmd([[sh -c 'for p in /usr/lib/x86_64-linux-gnu/libexec/polkit-kde-authentication-agent-1 /usr/lib/polkit-kde-authentication-agent-1 /usr/libexec/polkit-kde-authentication-agent-1; do [ -x "$p" ] && exec "$p"; done']])
+    -- Индексатор файлов Baloo (поиск Alt+Пробел и Dolphin). Сам он стартует только в KDE/GNOME
+    -- (OnlyShowIn, graphical-session.target), в Hyprland — нет, и новые файлы не попадали в поиск.
+    hl.exec_cmd("systemctl --user start kde-baloo.service")
 
     -- Панель: Quickshell (~/.config/quickshell), если установлен, иначе waybar
     -- (с отдельным GTK-конфигом ~/.config/hypr/gtk — breeze-dark для значков трея).
