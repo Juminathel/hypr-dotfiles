@@ -38,6 +38,8 @@ if [ $want_pkgs = 1 ]; then
     say "Ставлю пакеты (sudo pacman)…"
     # shellcheck disable=SC2086
     sudo pacman -S --needed $list
+    # кэш pacman: раз в неделю оставлять по 3 последние версии пакета (paccache из pacman-contrib)
+    sudo systemctl enable --now paccache.timer
 fi
 
 # положить src в dst, а то, что там уже было, сохранить рядом как .bak-ДАТА

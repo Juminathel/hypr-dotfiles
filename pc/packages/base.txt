@@ -79,6 +79,10 @@ flatpak
 btop
 mpv
 brightnessctl
+# jq — для hypr-ws-step (окошко с номером стола)
+jq
+# pacman-contrib — paccache.timer (раз в неделю чистит кэш pacman), checkupdates, pactree
+pacman-contrib
 
 # --- сборка плагинов Hyprland через hyprpm (обзор столов hyprexpo) ---
 base-devel

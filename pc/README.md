@@ -21,7 +21,8 @@ hypr-dotfiles/
 ├── wallpapers/           → ~/Pictures/wallpapers
 ├── face.png              → ~/.face        аватар (SDDM)
 ├── laptop-only/          только для ноутбука (выбор GPU и т.п.), на ПК не нужно
-└── tools/ani2xcur.py     конвертер курсоров Windows (.ani/.cur) → XCursor, им сделан Furina
+├── tools/ani2xcur.py     конвертер курсоров Windows (.ani/.cur) → XCursor, им сделан Furina
+└── tools/snapper-setup.sh  снимки системы перед обновлениями (snapper + grub-btrfs), см. ниже
 ```
 
 ## Как в Arch принято с программами
@@ -158,6 +159,34 @@ hyprpm enable hyprexpo
 1. `flatpak install flathub org.waywallen.waywallen`.
 2. Скачать `waywallen-layer-shell` (собран под Ubuntu, на Arch его лучше собрать заново) в `~/.local/bin`.
 3. В `hyprland.conf` раскомментировать две строки waywallen и закомментировать `exec-once = hyprpaper`.
+
+## Снимки системы (snapper)
+
+Корень на btrfs, поэтому перед каждым `pacman -S`/`-Syu` можно автоматически сохранять снимок системы
+«до» и «после». Настраивает всё одна команда (повторный запуск безопасен):
+
+```
+sudo bash pc/tools/snapper-setup.sh
+```
+
+Что она делает: снимки — в отдельном подтоме `@snapshots` (→ `/.snapshots`), кэш pacman — отдельный
+подтом (иначе старые пакеты застревают в снимках), хранится 10 обычных и 5 важных снимков, без почасовых.
+Снимки появляются в меню GRUB, подменю «Arch Linux snapshots».
+
+На ПК GRUB грузит UKI (`/boot/EFI/Linux/arch-linux.efi`, генератор `/etc/grub.d/15_uki`), а
+grub-btrfs умеет грузить снимки только с обычными `vmlinuz` + `initramfs`. Поэтому скрипт велит
+mkinitcpio собирать и `initramfs-linux.img`, а `zswap.enabled=0` из UKI переносит в
+`GRUB_CMDLINE_LINUX`. Обычный пункт «Arch Linux» при этом не появляется (`10_linux` выключен нарочно) —
+по умолчанию грузится UKI, как и раньше.
+
+```
+snapper list                         # список снимков (без sudo)
+sudo snapper undochange 12..13       # отменить изменения между снимками 12 и 13
+```
+
+Если после обновления система не грузится: в GRUB «Arch Linux snapshots» → снимок «pre»;
+загрузившись, `sudo snapper rollback` и перезагрузка. Ядро лежит в `/boot` (FAT) и в снимки не
+попадает — снимок грузится с текущим ядром. Если сломалось именно ядро, выручит запасное `linux-lts`.
 
 ## Грабли, на которые уже наступили (чтобы не наступать снова)
 

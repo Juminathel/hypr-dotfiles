@@ -690,6 +690,17 @@ hl.window_rule({
 })
 
 hl.window_rule({
+    -- PortProton и всё, что запущено через Wine (класс окна = имя .exe): плавающие окна
+    -- «как в Windows» — сами выбирают размер и позицию, в сетку не встают.
+    -- Полноэкранные игры от этого не страдают: fullscreen перекрывает float.
+    -- steam_proton — игры, запущенные через Proton вне Steam (так делает PortProton);
+    -- игры из самого Steam получают класс steam_app_N и сюда не попадают.
+    name = "wine-float",
+    match = { class = "^(.*\\.exe|steam_proton|ru\\.linux_gaming\\.PortProton|[Pp]ort[Pp]roton)$" },
+    float = true,
+})
+
+hl.window_rule({
     name = "games-no-effects",                -- полноэкранным окнам — ноль эффектов
     match = { fullscreen = true },
     no_blur = true, rounding = 0, border_size = 0,
