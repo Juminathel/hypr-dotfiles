@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Держит трей за waybar в сеансе Hyprland.
+"""Держит трей за панелью (waybar или Quickshell) в сеансе Hyprland.
 
 Трей (StatusNotifier) работает так: один процесс владеет D-Bus-именем
 org.kde.StatusNotifierWatcher, программы регистрируют у него свои значки, а панель берёт
-их оттуда. В Hyprland это имя держит waybar.
+их оттуда. В Hyprland это имя держит панель (waybar или Quickshell — см. hypr-bar).
 
 Беда: KDE-программы (настройки сети kcmshell6, Dolphin, Discover) по D-Bus будят kded6,
 а kded6 при старте забирает это имя себе. Значки начинают регистрироваться у него,
@@ -23,6 +23,19 @@ import subprocess
 import time
 
 NAME = "org.kde.StatusNotifierWatcher"
+BARS = ("waybar", "quickshell")
+
+
+def bar():
+    """Какая панель запущена — так же, как решает hypr-bar."""
+    try:
+        c = open(os.path.expanduser("~/.config/hypr/bar")).read().strip()
+    except OSError:
+        c = ""
+    if c:
+        return c
+    return "quickshell" if subprocess.run(["sh", "-c", "command -v quickshell"],
+                                          capture_output=True).returncode == 0 else "waybar"
 
 
 def owner_pid():
@@ -42,7 +55,7 @@ def comm(pid):
 
 def check():
     pid = owner_pid()
-    if pid is None or comm(pid) == "waybar":
+    if pid is None or comm(pid) in BARS:
         return
     who = comm(pid)
     try:
@@ -50,13 +63,14 @@ def check():
     except OSError:
         pass
     time.sleep(0.5)
-    subprocess.run(["pkill", "-x", "waybar"])   # hypr-respawn поднимет его заново
+    b = bar()
+    subprocess.run(["pkill", "-x", b])   # hypr-respawn (через hypr-bar) поднимет её заново
     subprocess.run(["notify-send", "-a", "Hyprland", "-u", "low", "Трей",
-                    f"{who} забрал трей у waybar — вернул"], check=False)
+                    f"{who} забрал трей у {b} — вернул"], check=False)
 
 
 def main():
-    time.sleep(5)   # дать waybar спокойно стартовать при входе
+    time.sleep(5)   # дать панели спокойно стартовать при входе
     check()
     mon = subprocess.Popen(
         ["dbus-monitor", "--session",
