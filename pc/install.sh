@@ -53,7 +53,7 @@ place() {
 }
 
 say "Настройки → ~/.config"
-for d in hypr waybar quickshell mako fuzzel foot mpv btop; do
+for d in hypr waybar quickshell mako fuzzel foot mpv btop bash; do
     [ -e "$here/config/$d" ] || continue
     place "$here/config/$d" "$HOME/.config/$d"
 done
@@ -99,6 +99,12 @@ cp --update=none "$here"/../wallpapers/* "$HOME/Pictures/wallpapers/"
 if ! grep -qs '.local/bin' "$HOME/.bash_profile"; then
     printf '\n# скрипты Hyprland (~/hypr-dotfiles)\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bash_profile"
     say "~/.local/bin добавлен в PATH (~/.bash_profile)"
+fi
+
+# приглашение bash с цветом и разделителями (строки с командами видны среди вывода)
+if ! grep -qs 'config/bash/prompt.sh' "$HOME/.bashrc"; then
+    printf '\n# приглашение (~/hypr-dotfiles)\n[ -f ~/.config/bash/prompt.sh ] && . ~/.config/bash/prompt.sh\n' >> "$HOME/.bashrc"
+    say "приглашение bash подключено (~/.bashrc)"
 fi
 
 # тёмная тема, значки и курсор для GTK-программ (на Wayland они читают gsettings, а не settings.ini)

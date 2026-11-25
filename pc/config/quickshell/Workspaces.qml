@@ -3,7 +3,7 @@ import Quickshell
 import Quickshell.Hyprland
 
 // Номера рабочих столов ЭТОГО монитора (all-outputs: false).
-// Главный монитор — столы 1–10 (1–5 всегда видны: persistent в hyprland.conf).
+// Главный монитор — столы 1–10 (видны только существующие).
 // Второй монитор — столы 11–20, подписаны 1–10 (их держит hypr-ws-compact).
 Row {
     id: root
