@@ -72,7 +72,7 @@ def main():
     except Exception:
         run(argv)
     found = [c for c in clients
-             if c.get("mapped") and c["workspace"]["id"] > 0
+             if c.get("mapped") and c["workspace"].get("id", -1) > 0
              and ({c["class"].lower(), c["initialClass"].lower()} & names)]
     if not found:
         run(argv)

@@ -55,11 +55,12 @@
 
   "network": {
     // Только значок; имя сети, сигнал и IP — во всплывающей подсказке
-    "interface": "wlp4s0",
+    // без "interface": Waybar сам берёт подключение, через которое идёт интернет (кабель или Wi-Fi)
     "format-wifi": "󰖩",
     "format-ethernet": "󰈀",
     "format-disconnected": "󰖪",
     "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
+    "tooltip-format-ethernet": "Кабель {ifname}\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
     "on-click": "$HOME/.local/bin/hypr-popup-show wifi",   // окно сетей под значком; ПКМ — настройки KDE
     "on-click-right": "kcmshell6 kcm_networkmanagement",
     "interval": 5

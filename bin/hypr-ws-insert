@@ -34,6 +34,8 @@ def main():
     mons = json.loads(hypr("monitors", "-j") or "[]")
     focused = next((m for m in mons if m["focused"]), None)
     main_mon = (next((m for m in mons if m["description"].startswith(ACER)), None)
+                or max((m for m in mons if m["name"] != "eDP-1"),          # самый большой внешний
+                       key=lambda m: m["width"] * m["height"], default=None)
                 or next((m for m in mons if m["name"] == "eDP-1"), None)
                 or focused)   # другой компьютер — главный тот, где фокус
     if not main_mon:
