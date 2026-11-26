@@ -90,7 +90,7 @@ hl.on("hyprland.start", function()
     -- Иначе D-Bus активирует xdg-desktop-portal-gtk без WAYLAND_DISPLAY, тот висит 120 с,
     -- и всё это время flatpak-приложения ждут портал. GTK-бэкенд портала после прошлого
     -- сеанса висит в failed — сбросить и поднять заново, потом фронтенд.
-    hl.exec_cmd("sh -c 'dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE XDG_MENU_PREFIX; systemctl --user reset-failed xdg-desktop-portal-gtk.service; systemctl --user restart xdg-desktop-portal-gtk.service xdg-desktop-portal-hyprland.service; systemctl --user restart xdg-desktop-portal.service'")
+    hl.exec_cmd("sh -c 'dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE XDG_MENU_PREFIX SAL_USE_VCLPLUGIN; systemctl --user reset-failed xdg-desktop-portal-gtk.service; systemctl --user restart xdg-desktop-portal-gtk.service xdg-desktop-portal-hyprland.service; systemctl --user restart xdg-desktop-portal.service'")
 
     -- Курсор, который рисует сам Hyprland (над панелью)
     hl.exec_cmd("hyprctl setcursor Furina 32")
