@@ -79,6 +79,8 @@ sddm
 flatpak
 btop
 mpv
+# mpv виден панели и playerctl (MPRIS): значок музыки, клавиши мультимедиа
+mpv-mpris
 brightnessctl
 # jq — для hypr-ws-step (окошко с номером стола)
 jq
