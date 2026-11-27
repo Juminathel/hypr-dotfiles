@@ -106,7 +106,7 @@ def menu(entries, placeholder, pos, select):
     global FUZZEL
     FUZZEL = subprocess.Popen(
         ["fuzzel", "--dmenu", "--index", "--keyboard-focus=on-demand",
-         "--no-exit-on-keyboard-focus-loss", "--anchor=top-right", "--y-margin=42",
+         "--no-exit-on-keyboard-focus-loss", "--anchor=top-right", "--y-margin=4",
          f"--width={WIDTH}", f"--lines={len(entries)}", *pos,
          f"--placeholder={placeholder}", f"--select-index={select}"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)

@@ -22,4 +22,4 @@ pos=""
 set -- $("$HOME/.local/bin/hypr-menu-pos" 42 2>/dev/null)
 [ -n "$2" ] && pos="--output=$1 --x-margin=$2"
 exec "$pw" -l custom --interactive --volume-step 5 -s 2 \
-    --launcher-command "fuzzel --dmenu --keyboard-focus=on-demand --no-exit-on-keyboard-focus-loss --anchor=top-right --y-margin=42 --width=42 --lines=8 $pos --placeholder '{hint}'"
+    --launcher-command "fuzzel --dmenu --keyboard-focus=on-demand --no-exit-on-keyboard-focus-loss --anchor=top-right --y-margin=4 --width=42 --lines=8 $pos --placeholder '{hint}'"
