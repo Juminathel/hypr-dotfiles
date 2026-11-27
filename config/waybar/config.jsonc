@@ -12,8 +12,9 @@
 
   "modules-left":   ["hyprland/workspaces", "hyprland/submap"],
   "modules-center": ["hyprland/window"],
-  "modules-right":  ["hyprland/language", "mpris", "pulseaudio", "backlight", "network",
-                     "memory", "temperature", "battery", "tray", "clock"],
+  // раскладка — у часов: там её не сдвигают ни длинный заголовок окна, ни название трека
+  "modules-right":  ["mpris", "pulseaudio", "backlight", "network",
+                     "memory", "temperature", "battery", "tray", "hyprland/language", "clock"],
 
   "hyprland/workspaces": {
     // Показываем номер воркспейса. Воркспейсы 1-5 видны всегда, даже пустые,
@@ -27,7 +28,7 @@
     "persistent-workspaces": {}   // стол 11 держит hypr-ws-compact (pin_laptop), без Acer его нет
   },
 
-  "hyprland/window": { "format": "{title}", "max-length": 50, "separate-outputs": true },
+  "hyprland/window": { "format": "{title}", "max-length": 40, "separate-outputs": true },
 
   "hyprland/language": {
     // en / ru. format-<lang> в waybar 0.15 не работает: модуль отключается («argument not found»)
