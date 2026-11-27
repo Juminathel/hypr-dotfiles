@@ -53,7 +53,7 @@ for name in ("bin", "config", "icons", "wallpapers", "laptop-only", "face.png"):
 os.makedirs(OUT, exist_ok=True)
 
 # ---------- конфиги как есть ----------
-for d in ["waybar", "mako", "fuzzel", "foot", "mpv", "btop"]:
+for d in ["waybar", "mako", "fuzzel", "foot", "mpv", "btop", "networkmanager-dmenu"]:
     copy(f".config/{d}", f"config/{d}")
 copy(".config/gtk-3.0/settings.ini", "config/gtk-3.0/settings.ini")
 if os.path.exists(os.path.join(H, ".config/gtk-4.0/settings.ini")):

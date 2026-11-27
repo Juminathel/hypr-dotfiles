@@ -3,6 +3,7 @@
 #
 #   ./install.sh                     — только разложить настройки и скрипты по местам
 #   ./install.sh --packages          — сначала поставить пакеты из packages/base.txt
+#                                      (и packages/aur.txt, если есть yay или paru)
 #   ./install.sh --packages --nvidia — плюс драйвер NVIDIA (packages/nvidia.txt)
 #
 # Всё, что уже лежит на месте, перед заменой переименовывается в *.bak-ДАТА — ничего не теряется.
@@ -17,7 +18,7 @@ for a in "$@"; do
     case $a in
         --packages) want_pkgs=1 ;;
         --nvidia)   want_nvidia=1 ;;
-        -h|--help)  sed -n '2,9p' "$0"; exit 0 ;;
+        -h|--help)  sed -n '2,10p' "$0"; exit 0 ;;
         *) echo "непонятный параметр: $a" >&2; exit 1 ;;
     esac
 done
@@ -38,6 +39,14 @@ if [ $want_pkgs = 1 ]; then
     say "Ставлю пакеты (sudo pacman)…"
     # shellcheck disable=SC2086
     sudo pacman -S --needed $list
+    aur=$(command -v yay || command -v paru || true)
+    if [ -n "$aur" ]; then
+        say "Ставлю пакеты из AUR ($(basename "$aur"))…"
+        # shellcheck disable=SC2046
+        "$aur" -S --needed $(pkgs "$here/packages/aur.txt")
+    else
+        say "yay/paru нет — пакеты из AUR (packages/aur.txt) поставь потом сам"
+    fi
 fi
 
 # положить src в dst, а то, что там уже было, сохранить рядом как .bak-ДАТА
@@ -51,7 +60,7 @@ place() {
 }
 
 say "Настройки → ~/.config"
-for d in hypr waybar mako fuzzel foot mpv btop bash; do
+for d in hypr waybar mako fuzzel foot mpv btop bash networkmanager-dmenu; do
     [ -e "$here/config/$d" ] || continue
     place "$here/config/$d" "$HOME/.config/$d"
 done

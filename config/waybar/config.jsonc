@@ -6,15 +6,13 @@
 
   "layer": "top",
   "position": "top",
+  // одна плоская полупрозрачная полоса во всю ширину, без отступов (вид — в style.css)
   "height": 32,
-  "spacing": 4,
-  "margin-top": 4,
-  "margin-left": 8,
-  "margin-right": 8,
+  "spacing": 0,
 
   "modules-left":   ["hyprland/workspaces", "hyprland/submap"],
   "modules-center": ["hyprland/window"],
-  "modules-right":  ["hyprland/language", "pulseaudio", "backlight", "network",
+  "modules-right":  ["hyprland/language", "mpris", "pulseaudio", "backlight", "network",
                      "memory", "temperature", "battery", "tray", "clock"],
 
   "hyprland/workspaces": {
@@ -29,11 +27,28 @@
     "persistent-workspaces": {}   // стол 11 держит hypr-ws-compact (pin_laptop), без Acer его нет
   },
 
-  "hyprland/window": { "format": "{title}", "max-length": 60, "separate-outputs": true },
+  "hyprland/window": { "format": "{title}", "max-length": 50, "separate-outputs": true },
 
   "hyprland/language": {
-    "format": "{short}",
+    // en / ru. format-<lang> в waybar 0.15 не работает: модуль отключается («argument not found»)
+    "format": "{shortDescription}",
     "on-click": "hyprctl switchxkblayout current next"
+  },
+
+  "mpris": {
+    // Что играет (Firefox, mpv, Telegram…). Нет плееров — модуль скрыт.
+    // ЛКМ — меню hypr-media в fuzzel под значком, ПКМ — пауза, колесо — треки.
+    // {dynamic} не годится: название длиннее dynamic-len он не обрезает, а выкидывает целиком
+    "format": "{status_icon} {title}",
+    "title-len": 24,
+    "status-icons": { "playing": "󰐊", "paused": "󰏤", "stopped": "󰓛" },
+    "tooltip-format": "{title}\n{artist}\n{player} · {position} / {length}",
+    "interval": 1,
+    "on-click": "$HOME/.local/bin/hypr-media",
+    "on-click-right": "$HOME/.local/bin/hypr-media toggle",
+    "on-scroll-up": "$HOME/.local/bin/hypr-media prev",
+    "on-scroll-down": "$HOME/.local/bin/hypr-media next",
+    "smooth-scrolling-threshold": 5   // тачпад: без порога листал бы по несколько треков
   },
 
   "pulseaudio": {
@@ -41,7 +56,7 @@
     "format-icons": { "default": ["󰕿", "󰖀", "󰕾"] },
     "format-muted": "󰝟",
     "format-bluetooth": "󰂰 {volume}%",
-    "on-click": "$HOME/.local/bin/hypr-popup-show volume",   // микшер выпадает под значком
+    "on-click": "$HOME/.local/bin/hypr-pwmenu",   // pwmenu в fuzzel под значком
     "on-click-right": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
     "scroll-step": 5
   },
@@ -61,7 +76,7 @@
     "format-disconnected": "󰖪",
     "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
     "tooltip-format-ethernet": "Кабель {ifname}\n{ipaddr}\n↓{bandwidthDownBits} ↑{bandwidthUpBits}",
-    "on-click": "$HOME/.local/bin/hypr-popup-show wifi",   // окно сетей под значком; ПКМ — настройки KDE
+    "on-click": "$HOME/.local/bin/hypr-nmdm",   // networkmanager-dmenu в fuzzel; ПКМ — настройки KDE
     "on-click-right": "kcmshell6 kcm_networkmanagement",
     "interval": 5
   },

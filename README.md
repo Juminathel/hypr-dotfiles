@@ -14,12 +14,13 @@ hypr-dotfiles/
 ├── packages/
 │   ├── base.txt          пакеты из репозиториев Arch (всё, что нужно этому набору)
 │   ├── nvidia.txt        драйвер NVIDIA для RTX 5060 Ti
-│   └── optional.txt      необязательное (значки Wine в трее, Steam, wireguard-tools)
+│   ├── optional.txt      необязательное (значки Wine в трее, Steam, wireguard-tools)
+│   └── aur.txt           из AUR (pwmenu); ставится, если есть yay или paru
 ├── config/               → ~/.config
 │   ├── hypr/             hyprland.conf (общий), hyprlock, hypridle, hyprpaper
 │   │   ├── machines/     desktop.conf — шаблон для ПК; laptop-msi.conf — как было на ноутбуке
 │   │   └── gtk/          отдельные настройки GTK для waybar (тёмные значки трея, курсор)
-│   ├── waybar/  mako/  fuzzel/  foot/  mpv/
+│   ├── waybar/  mako/  fuzzel/  foot/  mpv/  networkmanager-dmenu/
 │   └── gtk-3.0/  gtk-4.0/
 ├── bin/                  → ~/.local/bin   наши скрипты (список ниже)
 ├── icons/Furina          → ~/.icons       курсор Furina
@@ -127,8 +128,12 @@ hyprpm enable hyprexpo
 | Ctrl+Shift+Esc | btop |
 | **Super+/** | шпаргалка со всеми клавишами |
 
-Клики по панели: значок сети — Wi-Fi и **VPN-переключатели**, правой кнопкой — настройки сети KDE;
-громкость — микшер под значком; память — btop.
+Клики по панели (меню — fuzzel под значком, закрываются кликом мимо или повторным кликом):
+- сеть — networkmanager-dmenu: Wi-Fi, VPN, кабель; правой кнопкой — настройки сети KDE;
+- громкость — pwmenu: устройства, громкость, микрофон; правой кнопкой — без звука;
+- музыка/видео (значок появляется, только когда что-то играет: Firefox, mpv, Telegram…) — `hypr-media`:
+  пауза, следующий/предыдущий, ±10 с, выбор плеера; правой кнопкой — пауза, колесом — треки;
+- память — btop.
 
 ## Скрипты (`~/.local/bin`)
 
@@ -137,8 +142,11 @@ hyprpm enable hyprexpo
 | `hypr_popup.py`, `hypr-popup-show` | «постоянные» окна: поиск, буфер, Wi-Fi и громкость запущены заранее и живут спрятанными на скрытом столе, по вызову переезжают на экран за ~50 мс вместо ~350 |
 | `hypr-search` | Alt+Space: программы, окна, файлы (индекс Baloo + папка Telegram), калькулятор |
 | `hypr-cliphist-pick` | Super+V: история буфера (cliphist) с миниатюрами картинок |
-| `hypr-wifi` | окно сетей: Wi-Fi вкл/выкл, подключение с паролем в строке, VPN-переключатели |
-| `hypr-volume` | окно звука: устройство вывода, громкость, микрофон, громкость по программам |
+| `hypr-nmdm` | клик по значку сети: networkmanager-dmenu в fuzzel (настройки — `~/.config/networkmanager-dmenu`) |
+| `hypr-pwmenu` | клик по значку громкости: pwmenu в fuzzel |
+| `hypr-media` | клик по значку музыки: пауза, треки, ±10 с, выбор плеера (playerctl) |
+| `hypr-menu-pos` | ставит меню fuzzel на монитор под курсором, по центру под значком |
+| `hypr-wifi`, `hypr-volume` | прежние окна сети и звука (GTK); не запускаются, оставлены про запас |
 | `hypr-panel-popup` | старое имя для окон панели, теперь просто зовёт `hypr-popup-show` |
 | `hypr-popup-dismiss` | закрывает всплывающие окна кликом мимо (повешен на каждый клик) |
 | `hypr-alttab` | Alt+Tab с панелью значков (постоянный процесс) |

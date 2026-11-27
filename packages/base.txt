@@ -33,8 +33,9 @@ libpulse
 pavucontrol
 playerctl
 
-# --- сеть и Bluetooth (окно Wi-Fi/VPN работает через nmcli) ---
+# --- сеть и Bluetooth (меню сети на панели — networkmanager-dmenu в fuzzel) ---
 networkmanager
+networkmanager-dmenu
 plasma-nm
 kcmutils
 bluez

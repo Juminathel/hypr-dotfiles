@@ -1,87 +1,90 @@
-/* Catppuccin Mocha */
+/* Одна плоская полупрозрачная полоса (палитра Catppuccin Mocha).
+   Цвет — только там, где он что-то значит: активный стол, нет звука, мало заряда, жарко.
+   Остальное — обычный и приглушённый текст. */
+@define-color bg      rgba(17, 17, 27, 0.62);
+@define-color text    #cdd6f4;
+@define-color subtext #a6adc8;
+@define-color dim     #6c7086;
+@define-color accent  #89b4fa;
+@define-color hover   rgba(205, 214, 244, 0.08);
+@define-color red     #f38ba8;
+@define-color yellow  #f9e2af;
+@define-color peach   #fab387;
+@define-color green   #a6e3a1;
+
 * {
   font-family: "IBM Plex Mono", "JetBrainsMono Nerd Font", "DejaVu Sans Mono", monospace;  /* Nerd Font — для значков */
-  font-size: 15px;
+  font-size: 14px;
   border: none;
   border-radius: 0;
   min-height: 0;
 }
 
 window#waybar {
-  background: transparent;
-  color: #cdd6f4;
+  background: @bg;
+  border-bottom: 1px solid rgba(205, 214, 244, 0.06);
+  color: @text;
 }
 
-.modules-left, .modules-center, .modules-right {
-  background: rgba(30, 30, 46, 0.85);
-  border-radius: 10px;
-  padding: 0 6px;
-}
-
+/* ---------- столы: без подложек, активный — полоска снизу ---------- */
+#workspaces { margin-left: 4px; }
 #workspaces button {
-  padding: 0 9px;
-  margin: 3px 1px;
-  color: #a6adc8;
+  padding: 0 10px;
+  color: @dim;
   background: transparent;
-  border-radius: 7px;
-  font-weight: bold;
-  min-width: 18px;
+  border-bottom: 2px solid transparent;
+  min-width: 14px;
 }
-/* активный — заметная подложка */
-#workspaces button.active {
-  color: #1e1e2e;
-  background: #89b4fa;
-}
-/* есть окна, но не активен */
-#workspaces button:not(.empty):not(.active) {
-  color: #cdd6f4;
-  background: rgba(205, 214, 244, 0.10);
-}
-/* пустой постоянный — приглушённый */
-#workspaces button.empty  { color: #585b70; background: transparent; font-weight: normal; }
-#workspaces button.urgent { color: #1e1e2e; background: #f38ba8; }
-#workspaces button:hover  { color: #cdd6f4; background: rgba(205, 214, 244, 0.20); }
+#workspaces button:not(.empty) { color: @subtext; }                 /* есть окна */
+#workspaces button.active      { color: @text; border-bottom-color: @accent; font-weight: bold; }
+#workspaces button.urgent      { color: @red;  border-bottom-color: @red; }
+#workspaces button:hover       { color: @text; background: @hover; box-shadow: none; }
 
-#window { color: #a6adc8; padding: 0 10px; }
-/* на пустом столе (нет окна) — прячем и подложку центрального блока, иначе висит пустой «обрубок» */
-window#waybar.empty .modules-center { background: transparent; padding: 0; }
-window#waybar.empty #window { background: transparent; padding: 0; }
+#submap { color: @peach; padding: 0 10px; }
 
-#language, #pulseaudio, #backlight, #network, #cpu, #memory,
+/* ---------- заголовок окна ---------- */
+#window { color: @subtext; padding: 0 12px; }
+window#waybar.empty #window { padding: 0; }
+
+/* ---------- правый блок: ровный текст, одинаковые отступы ---------- */
+#language, #mpris, #pulseaudio, #backlight, #network, #cpu, #memory,
 #temperature, #battery, #tray, #clock {
-  padding: 0 9px;
+  padding: 0 10px;
+  color: @text;
 }
+/* кликабельные — лёгкая подсветка под курсором */
+#language:hover, #pulseaudio:hover, #backlight:hover, #network:hover,
+#memory:hover, #mpris:hover, #clock:hover { background: @hover; }
 
-#language    { color: #f9e2af; }
-#pulseaudio  { color: #89dceb; }
-#backlight   { color: #f9e2af; }
-#network     { color: #a6e3a1; font-family: "JetBrainsMono Nerd Font"; font-size: 17px; }
-#cpu         { color: #89b4fa; }
-#memory      { color: #cba6f7; }
-#temperature { color: #fab387; }
-#battery     { color: #a6e3a1; }
-#clock       { color: #cdd6f4; font-weight: bold; }
+#language    { color: @subtext; font-weight: bold; }
+#mpris       { color: @subtext; }
+#mpris.paused { color: @dim; }
+#memory, #temperature { color: @subtext; }
+#network     { font-family: "JetBrainsMono Nerd Font"; font-size: 16px; }
+#battery     { font-size: 16px; }   /* значок без цифр — крупнее, как Wi-Fi */
+#tray        { padding: 0 8px; }
+/* часы в две строки (время + дата): сжатый межстрочный интервал — line_height в config.jsonc */
+#clock       { font-weight: bold; font-size: 13px; padding: 0 12px; }
 
-#pulseaudio.muted        { color: #6c7086; }
-#network.disconnected    { color: #f38ba8; }
-#temperature.critical    { color: #f38ba8; }
-#battery.half            { color: #f9e2af; }   /* 25–50% — жёлтый */
-#battery { font-size: 17px; }               /* значок без цифр — крупнее, как Wi-Fi */
-#battery.warning         { color: #fab387; }
-#battery.critical        { color: #f38ba8; }
-#battery.charging, #battery.plugged { color: #a6e3a1; }   /* на зарядке — всегда зелёный */
+/* ---------- состояния ---------- */
+#pulseaudio.muted         { color: @dim; }
+#network.disconnected     { color: @red; }
+#temperature.critical     { color: @red; }
+#battery.half             { color: @yellow; }   /* 25–50% */
+#battery.warning          { color: @peach; }
+#battery.critical         { color: @red; }
+#battery.charging, #battery.plugged { color: @green; }   /* на зарядке — всегда зелёный */
 
 #battery.critical:not(.charging) {
-  background: #f38ba8;
+  background: @red;
   color: #1e1e2e;
-  border-radius: 8px;
   animation: blink 1s steps(2) infinite;
 }
-@keyframes blink { to { background: transparent; color: #f38ba8; } }
+@keyframes blink { to { background: transparent; color: @red; } }
 
 tooltip {
   background: rgba(30, 30, 46, 0.96);
   border: 1px solid #45475a;
   border-radius: 8px;
 }
-tooltip label { color: #cdd6f4; }
+tooltip label { color: @text; }

@@ -1,0 +1,22 @@
+#!/bin/sh
+# Клик по значку сети в waybar: networkmanager-dmenu в fuzzel. Повторный клик — закрыть меню.
+# Меню открывается на мониторе под курсором и центрируется под точкой клика (hypr-menu-pos).
+# waybar живёт с XDG_CONFIG_HOME=~/.config/hypr/gtk (тема GTK) и передаёт его в on-click — тогда
+# ни networkmanager-dmenu, ни fuzzel не находят свои конфиги (fuzzel рисует светлую тему по умолчанию).
+export XDG_CONFIG_HOME="$HOME/.config"
+unset GSETTINGS_BACKEND
+
+if pgrep -f '^python3 .*/networkmanager_dmenu' >/dev/null; then
+    pkill -x fuzzel
+    exit 0
+fi
+# fuzzel бывает только один: если открыто другое меню панели (звук/сеть/музыка), закрываем его
+# и ждём, пока он отпустит блокировку, иначе «failed to acquire lock: fuzzel already running».
+pkill -x fuzzel && for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x fuzzel >/dev/null || break; sleep 0.05; done
+# networkmanager_dmenu: на ноутбуке — скрипт в ~/.local/bin, в Arch — пакет из AUR (/usr/bin)
+nm="$HOME/.local/bin/networkmanager_dmenu"; [ -x "$nm" ] || nm=networkmanager_dmenu
+set -- $("$HOME/.local/bin/hypr-menu-pos" 42 2>/dev/null)
+if [ -n "$2" ]; then
+    exec "$nm" --output="$1" --x-margin="$2"
+fi
+exec "$nm"
