@@ -62,14 +62,22 @@ PanelWindow {
     readonly property int wsId: monitor?.activeWorkspace?.id ?? -1
     readonly property string winTitle: Sys.titles[wsId] ?? ""
     readonly property bool wsEmpty: (Sys.wsWindows[wsId] ?? 0) === 0
-    // место под заголовок по центру между боковыми блоками (на узком втором мониторе, когда
-    // справа ещё и музыка, его может не остаться — тогда заголовок прячется, а не наезжает)
-    readonly property real titleRoom: width - 2 * Math.max(leftBlock.width, rightBlock.width) - 2 * 8 - 8
+    // место под заголовок по центру между боковыми блоками
+    function roomWith(rightW) { return width - 2 * Math.max(leftBlock.width, rightW) - 2 * 8 - 8 }
+    readonly property real titleRoom: roomWith(rightBlock.width)
+    // Заголовок важнее музыки: на узком втором мониторе, если заголовок целиком не влезает рядом
+    // с музыкой, музыка прячется. Ширину правого блока без музыки считаем по остальным модулям.
+    readonly property bool titleShown: !wsEmpty && winTitle !== ""
+    readonly property real rightNoMedia: rightBlock.row.children
+        .filter(c => c !== media && c.visible).reduce((w, c) => w + c.width, 0) + 8
+    readonly property bool mediaFits: !titleShown
+        || roomWith(rightNoMedia + media.implicitWidth) >= titleMod.label.implicitWidth + titleMod.pad * 2
 
     Block {
         anchors.horizontalCenter: parent.horizontalCenter
-        visible: !bar.wsEmpty && bar.winTitle !== "" && bar.titleRoom >= 120
+        visible: bar.titleShown && bar.titleRoom >= 120
         Mod {
+            id: titleMod
             pad: 10
             color: Theme.subtext
             cursorShape: Qt.ArrowCursor
@@ -94,7 +102,7 @@ PanelWindow {
         anchors.right: parent.right
 
         // музыка/видео: значок появляется, только когда что-то играет
-        Media { bar: bar }
+        Media { id: media; bar: bar; fits: bar.mediaFits }
 
         // звук: ЛКМ — pwmenu в fuzzel под значком, ПКМ — без звука, колесо — ±5%
         Mod {

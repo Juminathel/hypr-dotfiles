@@ -20,7 +20,8 @@ Mod {
         return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0")
     }
 
-    visible: player !== null
+    property bool fits: true    // на узком мониторе панель прячет музыку, чтобы осталось место заголовку
+    visible: player !== null && fits
     text: (playing ? "󰐊" : player?.playbackState === MprisPlaybackState.Paused ? "󰏤" : "󰓛")
           + (title ? " " + (title.length > 24 ? title.slice(0, 23) + "…" : title) : "")
     color: playing ? Theme.subtext : Theme.overlay
