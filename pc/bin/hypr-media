@@ -22,6 +22,8 @@ PIDF = os.path.join(RUN, "hypr-media.pid")
 SEL = os.path.join(RUN, "hypr-media-player")
 BIN = os.path.expanduser("~/.local/bin")
 WIDTH = 42          # ширина меню в символах; та же цифра уходит в hypr-menu-pos
+# вид — как у панели и окон: плоско, тонкая голубая рамка (те же флаги — в hypr-pwmenu и networkmanager-dmenu)
+STYLE = "--border-radius=0 --border-width=1 --border-color=89b4fa99 --background-color=11111be6 --selection-color=89b4fa26 --selection-text-color=cdd6f4ff --selection-match-color=89b4faff --placeholder-color=6c7086ff --prompt-color=6c7086ff".split()
 FUZZEL = None       # открытое сейчас меню (Popen), чтобы закрыть его по SIGTERM
 
 # waybar запускает on-click с XDG_CONFIG_HOME=~/.config/hypr/gtk — fuzzel не нашёл бы свой конфиг
@@ -107,7 +109,7 @@ def menu(entries, placeholder, pos, select):
     FUZZEL = subprocess.Popen(
         ["fuzzel", "--dmenu", "--index", "--keyboard-focus=on-demand",
          "--no-exit-on-keyboard-focus-loss", "--anchor=top-right", "--y-margin=4",
-         f"--width={WIDTH}", f"--lines={len(entries)}", *pos,
+         f"--width={WIDTH}", f"--lines={len(entries)}", *STYLE, *pos,
          f"--placeholder={placeholder}", f"--select-index={select}"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     out, _ = FUZZEL.communicate("\n".join(entries))
