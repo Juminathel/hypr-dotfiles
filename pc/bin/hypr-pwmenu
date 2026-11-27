@@ -21,7 +21,5 @@ pw="$HOME/.local/bin/pwmenu"; [ -x "$pw" ] || pw=pwmenu
 pos=""
 set -- $("$HOME/.local/bin/hypr-menu-pos" 42 2>/dev/null)
 [ -n "$2" ] && pos="--output=$1 --x-margin=$2"
-# вид — как у панели и окон: плоско, тонкая голубая рамка (те же флаги — в hypr-media и networkmanager-dmenu)
-style="--border-radius=0 --border-width=1 --border-color=89b4fa99 --background-color=11111be6 --selection-color=89b4fa26 --selection-text-color=cdd6f4ff --selection-match-color=89b4faff --placeholder-color=6c7086ff --prompt-color=6c7086ff"
 exec "$pw" -l custom --interactive --volume-step 5 -s 2 \
-    --launcher-command "fuzzel --dmenu --keyboard-focus=on-demand --no-exit-on-keyboard-focus-loss --anchor=top-right --y-margin=4 --width=42 --lines=8 $style $pos --placeholder '{hint}'"
+    --launcher-command "fuzzel --dmenu --keyboard-focus=on-demand --no-exit-on-keyboard-focus-loss --anchor=top-right --y-margin=4 --width=42 --lines=8 $pos --placeholder '{hint}'"
