@@ -146,12 +146,14 @@ end)
 
 hl.config({
     general = {
-        gaps_in     = 4,
-        gaps_out    = 8,
-        border_size = 2,
+        -- Плоско, как панель: без скруглений, узкие отступы, тонкая бледно-голубая рамка
+        -- у окна в фокусе (#89b4fa, как полоска активного стола), у остальных почти не видна.
+        gaps_in     = 2,
+        gaps_out    = 4,
+        border_size = 1,
         col = {
-            active_border   = { colors = { "rgba(89b4faee)", "rgba(cba6f7ee)" }, angle = 45 },
-            inactive_border = "rgba(45475aaa)",
+            active_border   = "rgba(89b4fa99)",
+            inactive_border = "rgba(31324460)",
         },
         resize_on_border = true,
         -- tearing действует ТОЛЬКО на окна с правилом immediate (игры ниже)
@@ -160,13 +162,13 @@ hl.config({
     },
 
     decoration = {
-        rounding         = 8,
+        rounding         = 0,   -- всплывающие окна (поиск, буфер, шпаргалка) скругляют свои правила
         rounding_power   = 2,
         active_opacity   = 1.0,
         inactive_opacity = 0.95,
 
         shadow = {
-            enabled      = true,
+            enabled      = false,   -- в плоском стиле тень лишняя
             range        = 12,
             render_power = 3,
             color        = "rgba(00000055)",
@@ -683,10 +685,10 @@ hl.window_rule({
 })
 
 hl.window_rule({
-    -- Wallpaper Engine (app 431960) — не игра: перебиваем steam-games, обычное окно в сетке
+    -- Wallpaper Engine (app 431960) — не игра: перебиваем steam-games, обычное окно в сетке, рамка как у всех
     name = "wallpaper-engine-normal",
     match = { class = "^steam_app_431960$" },
-    tile = true, immediate = false, no_anim = false, rounding = 8, border_size = 2,
+    tile = true, immediate = false, no_anim = false, rounding = 0, border_size = 1,
 })
 
 hl.window_rule({
