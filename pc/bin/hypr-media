@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Управление музыкой/видео с панели: меню в fuzzel под значком mpris (как hypr-pwmenu и hypr-nmdm).
+
+  hypr-media          меню: пауза/играть, следующий, предыдущий, ±10 с, выбор плеера.
+                      Повторный запуск (клик по значку) закрывает уже открытое меню.
+  hypr-media toggle   пауза/играть у текущего плеера (ПКМ по значку)
+  hypr-media next     следующий трек (колесо вниз)
+  hypr-media prev     предыдущий трек (колесо вверх)
+
+Текущий плеер: тот, что выбран в меню (пока он не закрылся), иначе тот, что играет, иначе первый.
+Выбор хранится в $XDG_RUNTIME_DIR/hypr-media-player. Плееры и команды — playerctl (MPRIS).
+Закрытие кликом мимо — hypr-popup-dismiss (ищет fuzzel, у которого предок hypr-media).
+"""
+import os
+import signal
+import subprocess
+import sys
+import time
+
+RUN = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+PIDF = os.path.join(RUN, "hypr-media.pid")
+SEL = os.path.join(RUN, "hypr-media-player")
+BIN = os.path.expanduser("~/.local/bin")
+WIDTH = 42          # ширина меню в символах; та же цифра уходит в hypr-menu-pos
+FUZZEL = None       # открытое сейчас меню (Popen), чтобы закрыть его по SIGTERM
+
+# waybar запускает on-click с XDG_CONFIG_HOME=~/.config/hypr/gtk — fuzzel не нашёл бы свой конфиг
+os.environ["XDG_CONFIG_HOME"] = os.path.expanduser("~/.config")
+os.environ.pop("GSETTINGS_BACKEND", None)
+
+
+def pc(*args):
+    return subprocess.run(["playerctl", *args], capture_output=True, text=True).stdout.strip()
+
+
+def players():
+    return [p for p in pc("-l").splitlines() if p]
+
+
+def current(ps):
+    try:
+        saved = open(SEL).read().strip()
+    except OSError:
+        saved = ""
+    if saved in ps:
+        return saved
+    for p in ps:
+        if pc("-p", p, "status") == "Playing":
+            return p
+    return ps[0] if ps else None
+
+
+def short(text, n):
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def pretty(player):
+    """firefox.instance_1_60 → firefox"""
+    return player.split(".instance")[0]
+
+
+def title_of(p):
+    artist, title = pc("-p", p, "metadata", "--format", "{{artist}}\t{{title}}").partition("\t")[::2]
+    if artist and title:
+        return f"{title} — {artist}"
+    return title or artist or pretty(p)
+
+
+def already_open():
+    """открыто ли уже меню; если да — закрыть его (повторный клик по значку)"""
+    try:
+        pid = int(open(PIDF).read())
+        cmd = open(f"/proc/{pid}/cmdline", "rb").read()
+    except (OSError, ValueError):
+        return False
+    if pid == os.getpid() or b"hypr-media" not in cmd:
+        return False
+    subprocess.run(["pkill", "-P", str(pid), "-x", "fuzzel"])
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+    return True
+
+
+def position():
+    out = subprocess.run([os.path.join(BIN, "hypr-menu-pos"), str(WIDTH)],
+                         capture_output=True, text=True).stdout.split()
+    return [f"--output={out[0]}", f"--x-margin={out[1]}"] if len(out) == 2 else []
+
+
+def free_fuzzel():
+    """fuzzel бывает только один: закрыть другое меню панели (звук/сеть) и дождаться,
+    пока он отпустит блокировку, иначе «failed to acquire lock: fuzzel already running»"""
+    if subprocess.run(["pkill", "-x", "fuzzel"]).returncode != 0:
+        return
+    for _ in range(10):
+        if subprocess.run(["pgrep", "-x", "fuzzel"], capture_output=True).returncode != 0:
+            return
+        time.sleep(0.05)
+
+
+def menu(entries, placeholder, pos, select):
+    free_fuzzel()
+    global FUZZEL
+    FUZZEL = subprocess.Popen(
+        ["fuzzel", "--dmenu", "--index", "--keyboard-focus=on-demand",
+         "--no-exit-on-keyboard-focus-loss", "--anchor=top-right", "--y-margin=42",
+         f"--width={WIDTH}", f"--lines={len(entries)}", *pos,
+         f"--placeholder={placeholder}", f"--select-index={select}"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    out, _ = FUZZEL.communicate("\n".join(entries))
+    FUZZEL = None
+    try:
+        return int(out.strip())
+    except ValueError:
+        return None          # Esc, клик мимо, закрыли извне
+
+
+def drop_pidfile():
+    try:
+        if int(open(PIDF).read()) == os.getpid():
+            os.remove(PIDF)
+    except (OSError, ValueError):
+        pass
+
+
+def on_term(*_):
+    """закрыли извне: убрать свой fuzzel и выйти сразу. sys.exit тут нельзя — исключение посреди
+    communicate()/wait() оставляет захваченную блокировку subprocess, и процесс виснет"""
+    if FUZZEL:
+        FUZZEL.kill()
+    drop_pidfile()
+    os._exit(0)
+
+
+def interactive():
+    if already_open():
+        return
+    open(PIDF, "w").write(str(os.getpid()))
+    signal.signal(signal.SIGTERM, on_term)
+    try:
+        pos = position()
+        select = 0
+        while True:
+            ps = players()
+            if not ps:
+                subprocess.run(["notify-send", "-t", "2000", "Медиа", "Ничего не играет"])
+                return
+            p = current(ps)
+            playing = pc("-p", p, "status") == "Playing"
+            # (текст, действие, закрыть ли меню после)
+            items = [
+                ("󰏤  Пауза" if playing else "󰐊  Играть", ["play-pause"], True),
+                ("󰒭  Следующий", ["next"], False),
+                ("󰒮  Предыдущий", ["previous"], False),
+                ("󰑟  Назад 10 с", ["position", "10-"], False),
+                ("󰈑  Вперёд 10 с", ["position", "10+"], False),
+            ]
+            if len(ps) > 1:
+                for q in ps:
+                    mark = "󰄬" if q == p else "󰝚"
+                    label = f"{mark}  {pretty(q)} · {title_of(q)}"
+                    items.append((short(label, WIDTH - 2), q, False))
+            i = menu([t for t, _, _ in items], short(title_of(p), WIDTH - 4), pos, select)
+            if i is None or not 0 <= i < len(items):
+                return
+            _, action, close = items[i]
+            if isinstance(action, str):      # выбран другой плеер
+                open(SEL, "w").write(action)
+            else:
+                pc("-p", p, *action)
+            if close:
+                return
+            select = i
+            time.sleep(0.3)                  # метаданные после next/prev обновляются не сразу
+    finally:
+        drop_pidfile()
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if not cmd:
+        interactive()
+        return
+    action = {"toggle": "play-pause", "next": "next", "prev": "previous"}.get(cmd)
+    if not action:
+        sys.exit(__doc__)
+    p = current(players())
+    if p:
+        pc("-p", p, action)
+
+
+if __name__ == "__main__":
+    main()

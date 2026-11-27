@@ -7,7 +7,8 @@ import Quickshell.Services.Pipewire
 // Панель на одном мониторе — повторяет waybar/config.jsonc:
 //   слева   — рабочие столы, submap
 //   центр   — заголовок активного окна этого монитора
-//   справа  — раскладка, звук, подсветка, сеть, память, температура, батарея, трей, часы
+//   справа  — музыка, звук, микрофон, подсветка, сеть, память, температура, батарея, трей, раскладка, часы
+// Вид — одна плоская полупрозрачная полоса во всю ширину (как waybar ноутбука).
 PanelWindow {
     id: bar
     required property var modelData       // ShellScreen
@@ -18,38 +19,35 @@ PanelWindow {
     WlrLayershell.namespace: "qs-bar"     // по нему blur в hyprland.conf и hypr-popup-dismiss
 
     anchors { top: true; left: true; right: true }
-    margins { top: 4; left: 8; right: 8 }
     implicitHeight: Theme.barHeight
-    color: "transparent"
+    color: Theme.panel
+    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.panelLine }
 
     function run(cmd) { Quickshell.execDetached(["sh", "-c", cmd]) }
 
-    // выпадающие окна: открыто не больше одного; повторный щелчок по значку — закрыть
-    function toggle(p) {
-        const was = p.open
-        console.info("popup: щелчок по значку,", was ? "закрываю" : "открываю")
-        for (const q of [volPop, wifiPop]) q.open = false
-        p.open = !was
+    // меню в fuzzel под значком (hypr-nmdm, hypr-pwmenu, hypr-media; повторный клик закрывает).
+    // В $XDG_RUNTIME_DIR/hypr-panel-popup пишем, у какого x открыли: hypr-popup-dismiss, сработав
+    // на этот же клик, не закроет только что открытое меню (см. его описание).
+    function menu(script) {
+        run('printf "menu %s\\n" "$(hyprctl cursorpos | cut -d, -f1)" > "$XDG_RUNTIME_DIR/hypr-panel-popup"; '
+            + 'exec "$HOME/.local/bin/' + script + '"')
     }
-    VolumePopup { id: volPop; opener: volMod; bar: bar }
-    WifiPopup { id: wifiPop; opener: netMod; bar: bar }
+    // Прежние окна звука и сети (VolumePopup.qml, WifiPopup.qml) больше не открываются, оставлены про запас.
 
-    // общий вид трёх блоков
-    component Block: Rectangle {
+    // общий вид блоков: без подложек, просто ряд модулей на общей полосе
+    component Block: Item {
         default property alias items: row.data
         property alias row: row
-        color: Theme.panel
-        radius: 10
-        implicitWidth: row.implicitWidth + 12
+        implicitWidth: row.implicitWidth + 8
         implicitHeight: Theme.barHeight
-        Row { id: row; x: 6; height: parent.height; spacing: 4 }
+        Row { id: row; x: 4; height: parent.height; spacing: 0 }
     }
 
     // ───────────── слева ─────────────
     Block {
         id: leftBlock
         anchors.left: parent.left
-        Workspaces { monitor: bar.monitor; onActivated: { volPop.open = false; wifiPop.open = false } }
+        Workspaces { monitor: bar.monitor }
         Mod {
             visible: Sys.submap !== ""
             text: Sys.submap
@@ -72,7 +70,7 @@ PanelWindow {
             pad: 10
             color: Theme.subtext
             cursorShape: Qt.ArrowCursor
-            text: bar.winTitle.length > 60 ? bar.winTitle.slice(0, 59) + "…" : bar.winTitle
+            text: bar.winTitle.length > 40 ? bar.winTitle.slice(0, 39) + "…" : bar.winTitle
             // заголовок по центру не должен наезжать на боковые блоки (узкий второй монитор)
             maxWidth: bar.width - 2 * Math.max(leftBlock.width, rightBlock.width) - 2 * 8 - 12
         }
@@ -92,25 +90,19 @@ PanelWindow {
         id: rightBlock
         anchors.right: parent.right
 
-        // раскладка
-        Mod {
-            visible: Sys.layout !== ""
-            text: Sys.layout
-            color: Theme.yellow
-            onLeftClick: bar.run("hyprctl switchxkblayout current next")
-        }
+        // музыка/видео: значок появляется, только когда что-то играет
+        Media { bar: bar }
 
-        // звук: ЛКМ — окно громкости под значком, ПКМ — без звука, колесо — ±5%
+        // звук: ЛКМ — pwmenu в fuzzel под значком, ПКМ — без звука, колесо — ±5%
         Mod {
             id: volMod
-            tipOff: volPop.open
             visible: bar.sink !== null
             readonly property bool bt: (bar.sink?.name ?? "").startsWith("bluez")
             text: bar.muted ? "󰝟"
                 : (bt ? "󰂰" : ["󰕿", "󰖀", "󰕾"][Math.min(2, Math.floor(bar.vol / (100 / 3)))]) + " " + bar.vol + "%"
-            color: bar.muted ? Theme.overlay : Theme.sky
+            color: bar.muted ? Theme.overlay : Theme.text
             tip: bar.sink?.description ?? ""
-            onLeftClick: bar.toggle(volPop)
+            onLeftClick: bar.menu("hypr-pwmenu")
             onRightClick: if (bar.sink) bar.sink.audio.muted = !bar.sink.audio.muted
             onWheel: wheel => {
                 if (!bar.sink) return
@@ -125,7 +117,7 @@ PanelWindow {
         Mod {
             visible: bar.source !== null
             text: bar.micMuted ? "󰍭" : "󰍬 " + bar.micVol + "%"
-            color: bar.micMuted ? Theme.red : Theme.pink
+            color: bar.micMuted ? Theme.red : Theme.subtext
             tip: "Микрофон: " + (bar.source?.description ?? "")
             onLeftClick: if (bar.source) bar.source.audio.muted = !bar.source.audio.muted
             onRightClick: bar.run("pavucontrol -t 4")
@@ -141,32 +133,32 @@ PanelWindow {
         Mod {
             visible: Sys.hasLight
             text: "☀ " + Sys.lightPct + "%"
-            color: Theme.yellow
+            color: Theme.text
             onWheel: wheel => {
                 bar.run("hypr-brightness " + (wheel.angleDelta.y > 0 ? "+5" : "-5"))
                 Sys.refresh()
             }
         }
 
-        // сеть: только значок, подробности в подсказке. ЛКМ — окно сетей, ПКМ — настройки KDE
+        // сеть: только значок, подробности в подсказке.
+        // ЛКМ — networkmanager-dmenu в fuzzel (Wi-Fi, VPN, кабель), ПКМ — настройки KDE
         Mod {
             id: netMod
-            tipOff: wifiPop.open
             text: Sys.netType === "wifi" ? "󰖩" : Sys.netType === "ethernet" ? "󰈀" : "󰖪"
-            color: Sys.netType === "" ? Theme.red : Theme.green
+            color: Sys.netType === "" ? Theme.red : Theme.text
             fontFamily: Theme.iconFont
             fontSize: 17
             tip: Sys.netType === "" ? "Нет сети"
                : (Sys.netType === "wifi" ? Sys.netName + " (" + Sys.netSignal + "%)" : "Кабель " + Sys.netDev)
                  + "\n" + Sys.netIp + (Sys.netDown ? "\n↓" + Sys.netDown + " ↑" + Sys.netUp : "")
-            onLeftClick: bar.toggle(wifiPop)
+            onLeftClick: bar.menu("hypr-nmdm")
             onRightClick: bar.run("kcmshell6 kcm_networkmanagement")
         }
 
         // память; щелчок — btop
         Mod {
             text: "󰍛 " + Sys.memUsed.toFixed(1) + "G"
-            color: Theme.mauve
+            color: Theme.subtext
             tip: Sys.memUsed.toFixed(1) + "G / " + Sys.memTotal.toFixed(1) + "G (" + Sys.memPct + "%)"
             onLeftClick: bar.run("foot --app-id=btop-popup -e btop")
         }
@@ -175,7 +167,7 @@ PanelWindow {
         Mod {
             visible: Sys.temp >= 0
             text: Sys.temp + "°C"
-            color: Sys.temp >= 85 ? Theme.red : Theme.peach
+            color: Sys.temp >= 85 ? Theme.red : Theme.subtext
             cursorShape: Qt.ArrowCursor
         }
 
@@ -211,8 +203,6 @@ PanelWindow {
             Rectangle {
                 z: -1
                 anchors.fill: parent
-                anchors.topMargin: 3; anchors.bottomMargin: 3
-                radius: 8
                 color: Theme.red
                 visible: battery.alarm && !battery.blink
             }
@@ -225,6 +215,15 @@ PanelWindow {
         }
 
         Tray { bar: bar }
+
+        // раскладка — у часов: там её не сдвигают ни длинный заголовок окна, ни название трека
+        Mod {
+            visible: Sys.layout !== ""
+            text: Sys.layout
+            color: Theme.subtext
+            bold: true
+            onLeftClick: bar.run("hyprctl switchxkblayout current next")
+        }
 
         Clock {}
     }

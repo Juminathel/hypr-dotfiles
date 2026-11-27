@@ -27,6 +27,13 @@ MouseArea {
     acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
     cursorShape: Qt.PointingHandCursor
 
+    // кликабельные модули — лёгкая подсветка под курсором (как :hover в waybar)
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.hover
+        visible: mod.containsMouse && mod.cursorShape === Qt.PointingHandCursor
+    }
+
     onClicked: mouse => {
         if (mouse.button === Qt.RightButton) rightClick()
         else if (mouse.button === Qt.MiddleButton) middleClick()

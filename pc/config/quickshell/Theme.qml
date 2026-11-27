@@ -2,9 +2,12 @@ pragma Singleton
 import QtQuick
 import Quickshell
 
-// Цвета Catppuccin Mocha и шрифт — те же, что были в waybar/style.css
+// Цвета Catppuccin Mocha и шрифт — те же, что в waybar/style.css.
+// Панель — одна плоская полупрозрачная полоса; цвет только у состояний (активный стол, нет звука…).
 Singleton {
-    readonly property color panel:    Qt.rgba(30 / 255, 30 / 255, 46 / 255, 0.85)
+    readonly property color panel:    Qt.rgba(17 / 255, 17 / 255, 27 / 255, 0.62)
+    readonly property color panelLine: Qt.rgba(205 / 255, 214 / 255, 244 / 255, 0.06)  // линия под панелью
+    readonly property color hover:    Qt.rgba(205 / 255, 214 / 255, 244 / 255, 0.08)
     readonly property color tipBg:    Qt.rgba(30 / 255, 30 / 255, 46 / 255, 0.96)
     readonly property color tipBorder: "#45475a"
 

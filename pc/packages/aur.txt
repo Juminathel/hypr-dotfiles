@@ -1,0 +1,5 @@
+# Пакеты из AUR. Ставит ./install.sh --packages, если есть yay или paru; иначе — руками:
+#   yay -S --needed $(grep -v '^#' packages/aur.txt)
+
+# меню звука на панели (клик по значку громкости → hypr-pwmenu): устройства, громкость, микрофон
+pwmenu-git

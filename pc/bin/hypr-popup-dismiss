@@ -39,7 +39,10 @@ POPUPS = {
 }
 PANEL = {"waybar", "qs-bar"}   # namespace слоя панели: waybar или Quickshell
 STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-panel-popup")
-WIFI_FUZZEL = "^fuzzel --dmenu .*--prompt Wi-Fi"
+# меню на fuzzel: старое hypr-wifi-menu (--prompt Wi-Fi) и меню панели — сеть (hypr-nmdm), звук
+# (hypr-pwmenu), музыка (hypr-media); их подменю идут с разными подсказками, поэтому ловим любой
+# fuzzel, запущенный networkmanager_dmenu, pwmenu или hypr-media, см. menu_fuzzels
+WIFI_FUZZEL = "^fuzzel .*--dmenu .*--prompt Wi-Fi"
 SEARCH_H = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "hypr-search-h")
 ICON_HALF = 22               # клик в пределах ±22 px от открывшего значка — это сам значок
 
@@ -55,8 +58,29 @@ def inside(px, py, x, y, w, h):
     return x <= px < x + w and y <= py < y + h
 
 
+def menu_fuzzels():
+    """pid'ы fuzzel, запущенных меню с панели: networkmanager_dmenu (сеть), pwmenu (звук)
+    или hypr-media (музыка). Ищем по предкам: pwmenu запускает fuzzel через sh -c, nmdm
+    и hypr-media — напрямую."""
+    pids = []
+    for pid in subprocess.run(["pgrep", "-x", "fuzzel"], capture_output=True, text=True).stdout.split():
+        p = pid
+        for _ in range(3):
+            try:
+                p = open(f"/proc/{p}/stat").read().rsplit(")", 1)[1].split()[1]
+                cmd = open(f"/proc/{p}/cmdline", "rb").read().decode(errors="replace")
+            except (OSError, IndexError):
+                break
+            if ("networkmanager_dmenu" in cmd or "hypr-media" in cmd
+                    or cmd.split("\0")[0].endswith("pwmenu")):
+                pids.append(pid)
+                break
+    return pids
+
+
 def wifi_menu_open():
-    return subprocess.run(["pgrep", "-f", WIFI_FUZZEL], capture_output=True).returncode == 0
+    return (subprocess.run(["pgrep", "-f", WIFI_FUZZEL], capture_output=True).returncode == 0
+            or bool(menu_fuzzels()))
 
 
 def area(c):
@@ -122,6 +146,9 @@ def main():
         hypr("--batch", " ; ".join(f"dispatch closewindow address:{c['address']}" for c in popups))
     if wifi:
         subprocess.run(["pkill", "-f", WIFI_FUZZEL])
+        pids = menu_fuzzels()
+        if pids:
+            subprocess.run(["kill", *pids])
     try:
         os.remove(STATE)
     except OSError:

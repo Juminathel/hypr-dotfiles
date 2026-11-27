@@ -1,0 +1,25 @@
+#!/bin/sh
+# Клик по значку громкости на панели (Quickshell или waybar): pwmenu (github.com/e-tho/pwmenu, бинарник v0.4.0 в ~/.local/bin)
+# в fuzzel. Повторный клик — закрыть. Положение — как у меню сети (hypr-menu-pos), закрытие кликом
+# мимо — hypr-popup-dismiss. XDG_CONFIG_HOME сбрасываем по той же причине, что в hypr-nmdm.
+# --keyboard-focus=on-demand — см. комментарий в ~/.config/networkmanager-dmenu/config.ini
+# --no-exit-on-keyboard-focus-loss: иначе меню закрывается, стоит сдвинуть мышь (follow_mouse = 1 уводит
+# фокус на окно под курсором). Закрывают его клик мимо (hypr-popup-dismiss), повторный клик по значку, Esc.
+export XDG_CONFIG_HOME="$HOME/.config"
+unset GSETTINGS_BACKEND
+
+if pgrep -x pwmenu >/dev/null; then
+    pkill -x pwmenu
+    pkill -x fuzzel
+    exit 0
+fi
+# fuzzel бывает только один: если открыто другое меню панели (звук/сеть/музыка), закрываем его
+# и ждём, пока он отпустит блокировку, иначе «failed to acquire lock: fuzzel already running».
+pkill -x fuzzel && for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x fuzzel >/dev/null || break; sleep 0.05; done
+# pwmenu: на ноутбуке — бинарник в ~/.local/bin, в Arch — пакет из AUR (/usr/bin)
+pw="$HOME/.local/bin/pwmenu"; [ -x "$pw" ] || pw=pwmenu
+pos=""
+set -- $("$HOME/.local/bin/hypr-menu-pos" 42 2>/dev/null)
+[ -n "$2" ] && pos="--output=$1 --x-margin=$2"
+exec "$pw" -l custom --interactive --volume-step 5 -s 2 \
+    --launcher-command "fuzzel --dmenu --keyboard-focus=on-demand --no-exit-on-keyboard-focus-loss --anchor=top-right --y-margin=42 --width=42 --lines=8 $pos --placeholder '{hint}'"
