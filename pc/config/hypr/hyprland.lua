@@ -519,7 +519,7 @@ hl.window_rule({
 hl.window_rule({
     name = "cliphist-picker",                 -- история буфера Super+V
     match = { class = "^(hypr-cliphist|Hypr-cliphist)$" },
-    float = true, size = "600 720", rounding = 12,
+    float = true, size = "600 720", rounding = 0,
 })
 
 hl.window_rule({
