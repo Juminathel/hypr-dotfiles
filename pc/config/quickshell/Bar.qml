@@ -62,17 +62,20 @@ PanelWindow {
     readonly property int wsId: monitor?.activeWorkspace?.id ?? -1
     readonly property string winTitle: Sys.titles[wsId] ?? ""
     readonly property bool wsEmpty: (Sys.wsWindows[wsId] ?? 0) === 0
+    // место под заголовок по центру между боковыми блоками (на узком втором мониторе, когда
+    // справа ещё и музыка, его может не остаться — тогда заголовок прячется, а не наезжает)
+    readonly property real titleRoom: width - 2 * Math.max(leftBlock.width, rightBlock.width) - 2 * 8 - 8
 
     Block {
         anchors.horizontalCenter: parent.horizontalCenter
-        visible: !bar.wsEmpty && bar.winTitle !== ""
+        visible: !bar.wsEmpty && bar.winTitle !== "" && bar.titleRoom >= 120
         Mod {
             pad: 10
             color: Theme.subtext
             cursorShape: Qt.ArrowCursor
             text: bar.winTitle.length > 40 ? bar.winTitle.slice(0, 39) + "…" : bar.winTitle
             // заголовок по центру не должен наезжать на боковые блоки (узкий второй монитор)
-            maxWidth: bar.width - 2 * Math.max(leftBlock.width, rightBlock.width) - 2 * 8 - 12
+            maxWidth: bar.titleRoom
         }
     }
 

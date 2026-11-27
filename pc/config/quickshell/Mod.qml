@@ -21,7 +21,7 @@ MouseArea {
     signal middleClick()
 
     property real maxWidth: Infinity   // длиннее — текст сокращается многоточием
-    implicitWidth: Math.min(label.implicitWidth, maxWidth - pad * 2) + pad * 2
+    implicitWidth: Math.max(0, Math.min(label.implicitWidth, maxWidth - pad * 2)) + pad * 2
     implicitHeight: Theme.barHeight
     hoverEnabled: true
     acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
@@ -43,7 +43,7 @@ MouseArea {
     Text {
         id: label
         anchors.centerIn: parent
-        width: Math.min(implicitWidth, mod.maxWidth - mod.pad * 2)
+        width: Math.max(0, Math.min(implicitWidth, mod.maxWidth - mod.pad * 2))
         elide: Text.ElideRight
         color: mod.color
         font.family: mod.fontFamily
