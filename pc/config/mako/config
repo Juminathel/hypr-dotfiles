@@ -1,10 +1,11 @@
 font=IBM Plex Mono 10
-background-color=#1e1e2ee6
+# Плоско, как панель и окна: без скруглений, рамка 1 px #89b4fa на 60%, тёмный фон
+background-color=#11111be6
 text-color=#cdd6f4
-border-color=#89b4fa
+border-color=#89b4fa99
 progress-color=over #45475a
-border-size=2
-border-radius=10
+border-size=1
+border-radius=0
 padding=12
 margin=8
 default-timeout=5000
@@ -15,7 +16,7 @@ layer=overlay
 width=360
 
 [urgency=low]
-border-color=#45475a
+border-color=#45475a99
 default-timeout=3000
 
 [urgency=critical]
@@ -30,8 +31,8 @@ anchor=center
 width=75
 height=45
 padding=9
-border-radius=8
-border-color=#89b4fa
+border-radius=0
+border-color=#89b4fa99
 font=IBM Plex Mono Bold 15
 text-alignment=center
 format=%s
@@ -46,8 +47,8 @@ anchor=center
 width=360
 height=45
 padding=9
-border-radius=8
-border-color=#89b4fa
+border-radius=0
+border-color=#89b4fa99
 font=IBM Plex Mono Bold 15
 text-alignment=center
 format=%b
